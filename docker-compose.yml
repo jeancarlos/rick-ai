@@ -1,0 +1,21 @@
+services:
+  agent:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "80:80"
+    environment:
+      - HOST_PROJECT_DIR=/home/ubuntu/zap-agent
+    volumes:
+      - ./auth_info:/app/auth_info
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./scripts:/app/scripts:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    stdin_open: true
+    tty: true

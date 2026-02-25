@@ -1,0 +1,107 @@
+import type { MediaAttachment } from "../llm/types.js";
+
+/**
+ * A message coming from any connector into the Agent.
+ */
+export interface IncomingMessage {
+  /** Which connector sent this message */
+  connectorName: string;
+  /** Canonical user ID (phone number for the owner) */
+  userId: string;
+  /** Display name of the user, if known */
+  userName?: string;
+  /** Text content of the message */
+  text: string;
+  /** Optional media attachment (audio, image, file) */
+  media?: MediaAttachment;
+  /** Separate image media when audio is the primary media (audio+image combo) */
+  imageMedias?: MediaAttachment[];
+  /** URL to the stored audio blob (for playback in chat history) */
+  audioUrl?: string;
+  /** URLs to stored image blobs (for display in chat history) */
+  imageUrls?: string[];
+  /** Quoted/replied-to text, if this is a reply */
+  quotedText?: string;
+}
+
+/**
+ * Capabilities a connector can support. Not all connectors support all features.
+ * The Agent checks these to decide what to send.
+ */
+export interface ConnectorCapabilities {
+  /** Can send polls (WhatsApp-specific) */
+  polls: boolean;
+  /** Can show typing indicators */
+  typing: boolean;
+  /** Can receive media attachments */
+  media: boolean;
+  /** Can render markdown-like formatting */
+  richText: boolean;
+}
+
+/**
+ * Optional metadata for outgoing messages.
+ * Connectors that understand these fields can use them (e.g., Web UI routes
+ * messages to sub-agent sessions via sessionId). Connectors that don't
+ * understand them simply ignore the extra parameter.
+ */
+export interface SendMessageOptions {
+  /** Sub-agent session ID — Web UI uses this to route messages to the correct session panel */
+  sessionId?: string;
+}
+
+/**
+ * Interface that all connectors must implement.
+ *
+ * A connector is a bridge between an external messaging platform (WhatsApp, Web,
+ * Discord, Telegram, etc.) and the Agent core. It handles:
+ * - Receiving messages from the platform and forwarding them to the Agent
+ * - Sending Agent responses back to the platform
+ * - Platform-specific lifecycle (connection, auth, QR codes, etc.)
+ */
+export interface Connector {
+  /** Unique name for this connector (e.g., "whatsapp", "web", "discord") */
+  readonly name: string;
+
+  /** What this connector supports */
+  readonly capabilities: ConnectorCapabilities;
+
+  /**
+   * Start the connector. Called once during bootstrap.
+   * Should establish connection to the platform and begin listening for messages.
+   */
+  start(): Promise<void>;
+
+  /**
+   * Stop the connector gracefully. Called during shutdown.
+   */
+  stop(): Promise<void>;
+
+  /**
+   * Send a text message to the user via this connector.
+   * @param options - Optional metadata (e.g., sessionId for sub-agent routing).
+   */
+  sendMessage(userId: string, text: string, options?: SendMessageOptions): Promise<void>;
+
+  /**
+   * Send a poll/choice to the user. Optional — only if capabilities.polls is true.
+   */
+  sendPoll?(userId: string, question: string, options: string[]): Promise<void>;
+
+  /**
+   * Set typing indicator. Optional — only if capabilities.typing is true.
+   */
+  setTyping?(userId: string, composing: boolean): Promise<void>;
+}
+
+/**
+ * Callback signature for when a connector receives a message from the user.
+ * The connector calls this to forward the message to the Agent.
+ */
+export type OnMessageCallback = (msg: IncomingMessage) => Promise<string>;
+
+/**
+ * Callback signature for when a connector receives a poll vote.
+ * WhatsApp-specific, but abstracted so Agent doesn't import WhatsApp types.
+ */
+export type OnPollVoteCallback = (userId: string, selectedOptions: string[]) => Promise<void>;
