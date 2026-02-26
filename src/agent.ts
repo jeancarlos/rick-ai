@@ -1,4 +1,4 @@
-// Rick AI - Agente pessoal de IA
+// Rick AI - Agente pessoal de IA (v3)
 import { LLMService } from "./llm/llm-service.js";
 import { LLMMessage, MediaAttachment } from "./llm/types.js";
 import { GeminiProvider } from "./llm/providers/gemini.js";
