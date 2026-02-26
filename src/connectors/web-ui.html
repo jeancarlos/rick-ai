@@ -1836,38 +1836,29 @@
       </div>
       <div class="settings-section-body collapsed">
         <!-- Version info (clickable for easter egg) -->
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
           <div>
             <span class="settings-label" style="margin-bottom:2px;">Versao instalada</span>
             <div id="version-current" style="font-size:0.85rem;color:var(--text-secondary);cursor:default;user-select:none;" onclick="versionEasterEgg()">
               Carregando...
             </div>
           </div>
-          <div id="version-badge" style="display:none;padding:3px 10px;border-radius:12px;font-size:0.72rem;font-weight:600;"></div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <div id="version-badge" style="display:none;padding:3px 10px;border-radius:12px;font-size:0.72rem;font-weight:600;"></div>
+            <button id="version-refresh-btn" onclick="checkForUpdates()" title="Reverificar versao" style="display:none;border:1px solid var(--border);background:transparent;color:var(--text-secondary);width:24px;height:24px;border-radius:999px;cursor:pointer;font-size:0.85rem;line-height:1;">↻</button>
+          </div>
+        </div>
+
+        <div id="update-inline" style="display:none;margin-bottom:10px;">
+          <div style="font-size:0.8rem;font-weight:600;color:var(--text-primary);">Nova versao disponivel</div>
+          <div id="update-details" style="font-size:0.78rem;color:var(--text-secondary);margin-top:2px;"></div>
         </div>
 
         <!-- Check for updates -->
         <div class="settings-btn-row">
-          <button class="settings-action-btn primary" onclick="checkForUpdates()" id="btn-check-updates">
+          <button class="settings-action-btn primary" onclick="onVersionPrimaryClick()" id="btn-check-updates">
             Verificar atualizacoes
           </button>
-        </div>
-
-        <!-- Update available info -->
-        <div id="update-info" style="display:none;margin-top:12px;">
-          <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:12px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;">
-              <div>
-                <div style="font-size:0.82rem;font-weight:600;color:var(--text-primary);">Nova versao disponivel</div>
-                <div id="update-details" style="font-size:0.78rem;color:var(--text-secondary);margin-top:2px;"></div>
-              </div>
-            </div>
-            <div class="settings-btn-row" style="margin-top:10px;">
-              <button class="settings-action-btn primary" onclick="installUpdate()" id="btn-install-update">
-                Instalar atualizacao
-              </button>
-            </div>
-          </div>
         </div>
 
         <!-- Export/Import (hidden, revealed by easter egg) -->
@@ -3687,9 +3678,27 @@ function loadVersionInfo() {
     .catch(function() {});
 }
 
+var versionPrimaryAction = 'check';
+
+function applyVersionPrimaryButtonState() {
+  var btn = document.getElementById('btn-check-updates');
+  if (!btn) return;
+  btn.textContent = versionPrimaryAction === 'install' ? 'Instalar atualizacao' : 'Verificar atualizacoes';
+}
+
+function onVersionPrimaryClick() {
+  if (versionPrimaryAction === 'install') {
+    installUpdate();
+    return;
+  }
+  checkForUpdates();
+}
+
 function checkForUpdates() {
   var btn = document.getElementById('btn-check-updates');
+  var refreshBtn = document.getElementById('version-refresh-btn');
   btn.disabled = true;
+  if (refreshBtn) refreshBtn.disabled = true;
   btn.textContent = 'Verificando...';
   codeOpStatus('');
 
@@ -3703,7 +3712,8 @@ function checkForUpdates() {
       // Update current version display
       var currentEl = document.getElementById('version-current');
       var badge = document.getElementById('version-badge');
-      var updateInfo = document.getElementById('update-info');
+      var updateInline = document.getElementById('update-inline');
+      var updateDetails = document.getElementById('update-details');
 
       if (data.current && data.current.sha !== 'unknown') {
         var d = new Date(data.current.date);
@@ -3718,28 +3728,34 @@ function checkForUpdates() {
         badge.style.background = 'rgba(250,176,5,0.15)';
         badge.style.color = '#fab005';
         badge.textContent = 'Atualizacao disponivel';
+        if (refreshBtn) refreshBtn.style.display = 'inline-flex';
 
         var ld = new Date(data.latest.date);
         var latestDateStr = isNaN(ld.getTime()) ? data.latest.date : ld.toLocaleDateString('pt-BR') + ' ' + ld.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-        document.getElementById('update-details').textContent =
+        updateDetails.textContent =
           data.latest.sha + ' (' + latestDateStr + ')' +
           (data.latest.message ? ' — ' + data.latest.message : '');
-        updateInfo.style.display = 'block';
+        updateInline.style.display = 'block';
+        versionPrimaryAction = 'install';
       } else {
         // No update available (or GitHub API failed — assume up to date)
         badge.style.display = 'inline-block';
         badge.style.background = 'rgba(74,222,128,0.15)';
         badge.style.color = '#4ade80';
         badge.textContent = 'Atualizado';
-        updateInfo.style.display = 'none';
+        if (refreshBtn) refreshBtn.style.display = 'none';
+        updateInline.style.display = 'none';
+        versionPrimaryAction = 'check';
       }
+      applyVersionPrimaryButtonState();
     })
     .catch(function(err) {
       codeOpStatus('Erro: ' + err.message, { error: true });
     })
     .finally(function() {
       btn.disabled = false;
-      btn.textContent = 'Verificar atualizacoes';
+      if (refreshBtn) refreshBtn.disabled = false;
+      applyVersionPrimaryButtonState();
     });
 }
 
@@ -3769,10 +3785,9 @@ function waitForRestart(expectedVersion) {
     if (attempts >= maxAttempts) {
       clearInterval(interval);
       codeOpStatus('Timeout aguardando reinicio. Recarregue a pagina manualmente.', { error: true });
-      var btn = document.getElementById('btn-install-update');
-      var checkBtn = document.getElementById('btn-check-updates');
-      if (btn) { btn.disabled = false; btn.textContent = 'Instalar atualizacao'; }
-      if (checkBtn) { checkBtn.disabled = false; }
+      var btn = document.getElementById('btn-check-updates');
+      if (btn) btn.disabled = false;
+      applyVersionPrimaryButtonState();
     }
   }, 3000);
 }
@@ -3782,10 +3797,10 @@ function installUpdate() {
     return;
   }
 
-  var btn = document.getElementById('btn-install-update');
-  var checkBtn = document.getElementById('btn-check-updates');
+  var btn = document.getElementById('btn-check-updates');
+  var refreshBtn = document.getElementById('version-refresh-btn');
   btn.disabled = true;
-  checkBtn.disabled = true;
+  if (refreshBtn) refreshBtn.disabled = true;
   btn.textContent = 'Instalando...';
   codeOpStatus('Baixando do GitHub...', { spinning: true, progress: 10 });
 
@@ -3838,8 +3853,8 @@ function installUpdate() {
         codeOpStatus('Falha: ' + errText.substring(0, 200), { error: true });
       }
       btn.disabled = false;
-      checkBtn.disabled = false;
-      btn.textContent = 'Instalar atualizacao';
+      if (refreshBtn) refreshBtn.disabled = false;
+      applyVersionPrimaryButtonState();
     }
   };
 
