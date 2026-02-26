@@ -689,8 +689,11 @@ export class EditSession {
     // Pass prompt as a direct argument — no shell escaping needed.
     // Node's spawn() passes each arg via execve(), so no shell metacharacters
     // are interpreted regardless of prompt content.
+    // Sanitize: if prompt starts with "-", prefix with newline to prevent
+    // Claude CLI's arg parser from interpreting it as a flag (e.g. "---" → "unknown option").
+    const safePrompt = augmentedPrompt.startsWith("-") ? `\n${augmentedPrompt}` : augmentedPrompt;
     await this.runClaude([
-      "claude", "-p", augmentedPrompt,
+      "claude", "-p", safePrompt,
       "--system-prompt", EDIT_SYSTEM_PROMPT,
       "--output-format", "stream-json",
       "--dangerously-skip-permissions",
@@ -716,9 +719,10 @@ export class EditSession {
     await this.ensureFreshToken();
     this.lastFailedPrompt = { text: prompt, medias, isContinue: true, hadOutput: false };
     const augmentedPrompt = await this.augmentPromptWithImages(prompt, medias);
-    // Pass prompt as a direct argument — no shell escaping needed.
+    // Same sanitization as sendPrompt
+    const safePrompt = augmentedPrompt.startsWith("-") ? `\n${augmentedPrompt}` : augmentedPrompt;
     await this.runClaude([
-      "claude", "-p", augmentedPrompt,
+      "claude", "-p", safePrompt,
       "--continue",
       "--system-prompt", EDIT_SYSTEM_PROMPT,
       "--output-format", "stream-json",
