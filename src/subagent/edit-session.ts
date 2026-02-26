@@ -991,27 +991,25 @@ export class EditSession {
     this.state = "publishing";
 
     try {
-      // Git push from the staging dir via a docker container.
-      // Strategy: git init → add remote → commit → push (fast-forward first, rebase if needed, force-with-lease last resort)
+      // Git push from the HOST PROJECT DIR (not the staging dir!).
+      // After deploy.sh succeeds, the host dir already has the updated src/ plus
+      // all other project files (.git, scripts/, docker/, etc.). Pushing from the
+      // staging dir would lose everything outside src/ and destroy the git history.
       const pushScript = `
 set -e
-cd /workspace
+cd /project
 
 # Configure git
-git config --global user.email "rick-ai@bot.local"
-git config --global user.name "Rick AI"
-git config --global init.defaultBranch main
+git config user.email "rick-ai@bot.local"
+git config user.name "Rick AI"
 
-# Initialize repo and add remote with embedded token
-git init
-git remote add origin "https://x-access-token:${githubToken}@github.com/${targetRepo}.git"
+# Ensure remote uses the token (overwrite origin if it exists)
+git remote set-url origin "https://x-access-token:${githubToken}@github.com/${targetRepo}.git" 2>/dev/null \
+  || git remote add origin "https://x-access-token:${githubToken}@github.com/${targetRepo}.git"
 
-# Fetch existing remote state
-git fetch origin main 2>/dev/null || echo "[publish] Repositorio vazio ou branch main nao existe"
-
-# Add all files and commit
+# Stage all changes (deploy.sh already updated src/ in place)
 git add -A
-git commit -m "publish: atualizado via /publish do Rick AI" --allow-empty 2>/dev/null || echo "[publish] Nada a commitar"
+git commit -m "publish: atualizado via /publish do Rick AI" --allow-empty || echo "[publish] Nada a commitar"
 
 # Push strategy: fast-forward → rebase → force-with-lease
 if git push origin main 2>/dev/null; then
@@ -1030,7 +1028,7 @@ echo "[publish] Codigo publicado com sucesso em github.com/${targetRepo}"
 
       const child = spawn("docker", [
         "run", "--rm",
-        "-v", `${this.stagingDir}:/workspace`,
+        "-v", `${projectDir}:/project`,
         "--network", "host",
         "node:22-slim",
         "bash", "-c", pushScript,
