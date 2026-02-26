@@ -183,10 +183,10 @@ export class WebConnector implements Connector {
                 });
               }
 
-              // Restore typing indicator state for reconnecting clients (e.g. after F5)
-              if (this.currentlyTyping) {
-                this.send(ws, { type: "typing", composing: true });
-              }
+              // Always restore the current typing indicator state for reconnecting clients
+              // (e.g. after F5 or phone unlock). Sending composing:false is equally important
+              // so clients that missed a "typing:false" event don't stay stuck on "processing".
+              this.send(ws, { type: "typing", composing: this.currentlyTyping });
 
               // Restore edit mode state for reconnecting clients (e.g. after F5)
               if (this.agentBridge?.isEditModeActive()) {

@@ -2353,6 +2353,11 @@ function connectWebSocket() {
 
   ws.onclose = function() {
     if (authenticated) {
+      // Reset the typing indicator immediately when the connection drops.
+      // This prevents the "still processing" stuck state when the phone is unlocked
+      // after locking mid-session: the server sends typing:false on reconnect, but
+      // resetting here avoids any visible flicker before that message arrives.
+      showTyping(false);
       updateConnectionBar('disconnected');
       scheduleReconnect();
     }
