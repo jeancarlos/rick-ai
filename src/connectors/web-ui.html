@@ -2360,7 +2360,7 @@ function connectWebSocket() {
 
   ws.onerror = function() {
     if (!authenticated) {
-      document.getElementById('login-error').textContent = 'Erro de conexao. Servidor offline?';
+      document.getElementById('login-error').textContent = 'WebSocket recusado. Servidor offline ou WEB_AUTH_PASSWORD nao configurado no .env (reinicie o container apos configurar).';
       document.getElementById('login-btn').disabled = false;
     }
   };
