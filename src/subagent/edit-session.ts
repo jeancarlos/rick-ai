@@ -382,6 +382,19 @@ export class EditSession {
   private async runClaude(args: string[]): Promise<void> {
     this.startTyping();
 
+    const isRateLimitSignal = (text: string): boolean => {
+      const lower = text.toLowerCase();
+      return (
+        lower.includes("rate limit") ||
+        lower.includes("429") ||
+        lower.includes("overloaded") ||
+        lower.includes("credits") ||
+        lower.includes("quota") ||
+        lower.includes("hit your limit") ||
+        (lower.includes("limit") && lower.includes("resets"))
+      );
+    };
+
     return new Promise<void>((resolve) => {
       // Use -w to set working directory inside the container.
       // No sh -c — args are passed directly via execve, preventing shell injection.
@@ -419,14 +432,7 @@ export class EditSession {
               authFailed = true;
             }
             // Detect rate limit / credits exhaustion
-            if (
-              trimmed.includes("rate limit") ||
-              trimmed.includes("Rate limit") ||
-              trimmed.includes("overloaded") ||
-              trimmed.includes("credits") ||
-              trimmed.includes("quota") ||
-              trimmed.includes("429")
-            ) {
+            if (isRateLimitSignal(trimmed)) {
               rateLimited = true;
             }
             continue;
@@ -452,13 +458,7 @@ export class EditSession {
           // Detect rate limit in JSON error events
           if (evt.type === "error") {
             const errMsg = typeof evt.error === "string" ? evt.error : evt.error?.message || "";
-            if (
-              errMsg.includes("rate") ||
-              errMsg.includes("overloaded") ||
-              errMsg.includes("429") ||
-              errMsg.includes("credits") ||
-              errMsg.includes("quota")
-            ) {
+            if (isRateLimitSignal(errMsg)) {
               rateLimited = true;
             }
           }
@@ -468,6 +468,9 @@ export class EditSession {
               if (block.type === "text") {
                 queue.push(block.text);
                 totalOutput += block.text.length;
+                if (isRateLimitSignal(block.text)) {
+                  rateLimited = true;
+                }
               } else if (block.type === "tool_use") {
                 let toolLine = `\n\`[${block.name}]\` `;
                 if (block.input?.command) {
@@ -518,7 +521,7 @@ export class EditSession {
         this.stopTyping();
 
         // Rate limited — try GPT fallback if available
-        if (rateLimited && !authFailed && this.gptFallback && totalOutput < 100) {
+        if (rateLimited && !authFailed && this.gptFallback) {
           logger.warn({ sessionId: this.id, totalOutput }, "Edit session: Claude rate limited, trying GPT fallback");
           await this.sendMessage("_Claude atingiu o limite. Redirecionando para GPT Codex..._");
           try {

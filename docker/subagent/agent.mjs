@@ -120,7 +120,21 @@ async function callAnthropic(provider, messages, systemPrompt, tools) {
     err.status = resp.status;
     throw err;
   }
-  return await resp.json();
+  const json = await resp.json();
+
+  // Detect rate limit returned as 200 with limit message in text content
+  const textBlocks = json.content?.filter(b => b.type === "text").map(b => b.text) || [];
+  const fullText = textBlocks.join(" ").toLowerCase();
+  if (
+    (fullText.includes("hit your limit") || (fullText.includes("limit") && fullText.includes("resets"))) &&
+    fullText.length < 200
+  ) {
+    const err = new Error(`Anthropic rate limit (in-body): ${textBlocks.join(" ").substring(0, 200)}`);
+    err.status = 429;
+    throw err;
+  }
+
+  return json;
 }
 
 async function callOpenAI(provider, messages, systemPrompt, tools) {
@@ -335,7 +349,7 @@ async function llmCall(messages, systemPrompt, tools) {
         return normalizeGeminiResponse(result, provider);
       }
     } catch (err) {
-      const isRateLimit = err.status === 429 || err.status === 529 || /rate.?limit|quota|overloaded|capacity/i.test(err.message);
+      const isRateLimit = err.status === 429 || err.status === 529 || /rate.?limit|quota|overloaded|capacity|hit your limit|limit.*resets/i.test(err.message);
       if (isRateLimit) {
         emit("status", { message: `${provider.name} rate limited, tentando proximo...` });
         // Disable for 60s
