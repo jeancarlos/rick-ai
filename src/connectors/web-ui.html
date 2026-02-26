@@ -1825,10 +1825,6 @@
         <div class="typing-indicator" id="typing-indicator">
           <span></span><span></span><span></span>
         </div>
-        <div class="qr-overlay" id="qr-overlay">
-          <div class="qr-title">Escaneie o QR code no WhatsApp:</div>
-          <pre id="qr-content"></pre>
-        </div>
       </div>
 
       <div class="attachments-preview" id="attachments-preview"></div>
@@ -2050,7 +2046,11 @@
             Desconectado
           </span>
         </div>
-        <p class="settings-hint" style="margin-top:8px;">O status do WhatsApp e atualizado automaticamente. Escaneie o QR code no chat principal para conectar.</p>
+        <div class="qr-overlay" id="qr-overlay" style="margin-top:12px;">
+          <div class="qr-title">Escaneie o QR code no WhatsApp:</div>
+          <pre id="qr-content"></pre>
+        </div>
+        <p class="settings-hint" style="margin-top:8px;">O status do WhatsApp é atualizado automaticamente. Quando desconectado, o QR code aparecerá aqui para conectar.</p>
         <div class="settings-btn-row">
           <button class="settings-action-btn danger" id="disconnect-whatsapp-btn" onclick="disconnectWhatsApp()">Desconectar WhatsApp</button>
         </div>
@@ -2742,12 +2742,10 @@ function storeMessage(sessionId, text, from, audioUrl, imageUrls, messageType) {
 
 function renderSessionMessages(sessionId) {
   var container = document.getElementById('messages-main');
-  // Clear all messages except typing indicator and qr
+  // Clear all messages except typing indicator
   var typing = document.getElementById('typing-indicator');
-  var qr = document.getElementById('qr-overlay');
   container.innerHTML = '';
   container.appendChild(typing);
-  container.appendChild(qr);
 
   var messages = sessionMessages[sessionId] || [];
   var currentToolBlock = null; // active terminal block being built
@@ -3226,7 +3224,20 @@ function showQrCode(data) {
   var content = document.getElementById('qr-content');
   content.textContent = data;
   overlay.classList.add('visible');
-  scrollToBottom();
+
+  // Expand the "Conectores" section in settings so the QR code is visible
+  document.querySelectorAll('.settings-section-header').forEach(function(h) {
+    if (h.querySelector('h3') && h.querySelector('h3').textContent.trim() === 'Conectores') {
+      if (h.classList.contains('collapsed')) {
+        h.classList.remove('collapsed');
+        var body = h.nextElementSibling;
+        if (body) body.classList.remove('collapsed');
+      }
+    }
+  });
+
+  // Notify the user with a toast to check settings
+  showToast('QR code do WhatsApp disponível em Configurações → Conectores');
 }
 
 function scrollToBottom() {
@@ -4056,10 +4067,13 @@ function submitOAuthInput() {
 function updateWhatsAppStatusBadge() {
   var badge = document.getElementById('whatsapp-status-badge');
   var disconnectBtn = document.getElementById('disconnect-whatsapp-btn');
+  var qrOverlay = document.getElementById('qr-overlay');
   if (whatsappConnected) {
     badge.className = 'settings-status connected';
     badge.innerHTML = '<span class="status-dot green"></span>Conectado';
     if (disconnectBtn) disconnectBtn.disabled = false;
+    // Hide QR code when connected
+    if (qrOverlay) qrOverlay.classList.remove('visible');
   } else {
     badge.className = 'settings-status disconnected';
     badge.innerHTML = '<span class="status-dot red"></span>Desconectado';
