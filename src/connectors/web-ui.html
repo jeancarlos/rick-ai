@@ -3676,6 +3676,40 @@ function checkForUpdates() {
     });
 }
 
+/**
+ * Poll /health until Rick comes back online after a restart.
+ * @param {string|null} expectedVersion - if known, verify the new version matches
+ */
+function waitForRestart(expectedVersion) {
+  var attempts = 0;
+  var maxAttempts = 60; // 60 * 3s = 3 minutes max
+  var interval = setInterval(function() {
+    attempts++;
+    var pct = Math.min(85 + Math.floor(attempts * 0.25), 99);
+    codeOpStatus('Aguardando Rick reiniciar... (' + attempts + '/' + maxAttempts + ')', { spinning: true, progress: pct });
+
+    fetch('/health', { signal: AbortSignal.timeout(3000) })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.status === 'ok') {
+          clearInterval(interval);
+          codeOpStatus('Atualizacao instalada com sucesso!', { success: true, progress: 100 });
+          setTimeout(function() { location.reload(); }, 2000);
+        }
+      })
+      .catch(function() { /* still down, keep polling */ });
+
+    if (attempts >= maxAttempts) {
+      clearInterval(interval);
+      codeOpStatus('Timeout aguardando reinicio. Recarregue a pagina manualmente.', { error: true });
+      var btn = document.getElementById('btn-install-update');
+      var checkBtn = document.getElementById('btn-check-updates');
+      if (btn) { btn.disabled = false; btn.textContent = 'Instalar atualizacao'; }
+      if (checkBtn) { checkBtn.disabled = false; }
+    }
+  }, 3000);
+}
+
 function installUpdate() {
   if (!confirm('Instalar atualizacao do GitHub?\n\nIsso vai:\n1. Baixar o codigo mais recente\n2. Rebuild + restart do container\n\nSe o build falhar, rollback automatico.')) {
     return;
@@ -3707,18 +3741,34 @@ function installUpdate() {
     if (xhr.status === 200) {
       try {
         var resp = JSON.parse(xhr.responseText);
+        if (resp.deploying) {
+          // Server responded before starting the rebuild — it will restart soon
+          codeOpStatus('Build iniciando... Rick vai reiniciar.', { spinning: true, progress: 80, log: resp.log || '' });
+          waitForRestart(resp.version);
+          return;
+        }
         codeOpStatus('Atualizacao instalada! Reconectando...', { success: true, progress: 100, log: resp.log || '' });
       } catch(e) {
         codeOpStatus('Atualizacao instalada! Reconectando...', { success: true, progress: 100 });
       }
       setTimeout(function() { location.reload(); }, 3000);
+    } else if (xhr.status === 520 || xhr.status === 502 || xhr.status === 503 || xhr.status === 504) {
+      // Cloudflare/proxy error — server likely restarting (this is expected)
+      codeOpStatus('Container reiniciando... Aguardando...', { spinning: true, progress: 85 });
+      waitForRestart(null);
     } else {
       var errText = xhr.responseText;
       try {
         var errResp = JSON.parse(xhr.responseText);
         codeOpStatus('Falha: ' + (errResp.error || errText), { error: true, log: errResp.log || '' });
       } catch(e) {
-        codeOpStatus('Falha: ' + errText, { error: true });
+        // If response is HTML (e.g. Cloudflare error page), it's a restart
+        if (errText.indexOf('<!DOCTYPE') !== -1 || errText.indexOf('cloudflare') !== -1) {
+          codeOpStatus('Container reiniciando... Aguardando...', { spinning: true, progress: 85 });
+          waitForRestart(null);
+          return;
+        }
+        codeOpStatus('Falha: ' + errText.substring(0, 200), { error: true });
       }
       btn.disabled = false;
       checkBtn.disabled = false;
@@ -3728,9 +3778,9 @@ function installUpdate() {
 
   xhr.onerror = function() {
     clearInterval(pollInterval);
-    // Connection lost likely means container restarted (success)
-    codeOpStatus('Container reiniciando... Reconectando...', { success: true, progress: 95 });
-    setTimeout(function() { location.reload(); }, 5000);
+    // Connection lost means container restarted (expected during update)
+    codeOpStatus('Container reiniciando... Aguardando...', { spinning: true, progress: 85 });
+    waitForRestart(null);
   };
 
   xhr.send('');

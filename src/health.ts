@@ -345,51 +345,57 @@ async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<
     ]);
     deployLog.push("[update] Files copied");
 
-    // Build with version args
-    deployLog.push("[update] Building...");
-    try {
-      const buildOutput = await execAsyncOutput("docker", [
-        "run", "--rm",
-        "-v", "/var/run/docker.sock:/var/run/docker.sock",
-        "-v", `${projectDir}:${projectDir}`,
-        "-w", projectDir,
-        "-e", `RICK_COMMIT_SHA=${commitSha}`,
-        "-e", `RICK_COMMIT_DATE=${commitDate}`,
-        "docker:cli",
-        "docker", "compose", "up", "-d", "--build",
-      ], undefined, 300000);
-      const lastLines = buildOutput.trim().split("\n").slice(-8).join("\n");
-      deployLog.push(lastLines);
-      deployLog.push("[update] Update successful!");
+    // Respond immediately BEFORE rebuilding.
+    // The rebuild (`docker compose up -d --build`) restarts this container,
+    // so we can never send a response after — the connection dies.
+    // The client handles the disconnection and polls /health to confirm.
+    deployLog.push("[update] Starting build...");
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      success: true,
+      deploying: true,
+      version: commitSha,
+      log: deployLog.join("\n"),
+      message: "Arquivos copiados. Build iniciando — Rick vai reiniciar em breve.",
+    }));
 
-      await cleanupHostDir(hostStaging);
-      await cleanupHostDir(`${projectDir}/src.bak`);
-
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ success: true, version: commitSha, log: deployLog.join("\n") }));
-    } catch (buildErr) {
-      deployLog.push("[update] Build FAILED: " + (buildErr as Error).message);
-      // Rollback
+    // Fire-and-forget: rebuild in the background.
+    // This will restart the container, killing this process.
+    // If build fails, rollback restores the backup.
+    setImmediate(async () => {
       try {
+        logger.info("Update: starting docker compose build (will restart container)...");
         await execAsyncOutput("docker", [
           "run", "--rm",
+          "-v", "/var/run/docker.sock:/var/run/docker.sock",
           "-v", `${projectDir}:${projectDir}`,
-          "alpine:latest",
-          "sh", "-c",
-          `rm -rf ${projectDir}/src && cp -r ${projectDir}/src.bak ${projectDir}/src && rm -rf ${projectDir}/src.bak`,
-        ]);
-        deployLog.push("[update] Rollback complete");
-      } catch (rbErr) {
-        deployLog.push("[update] Rollback FAILED: " + (rbErr as Error).message);
-      }
-      await cleanupHostDir(hostStaging);
+          "-w", projectDir,
+          "-e", `RICK_COMMIT_SHA=${commitSha}`,
+          "-e", `RICK_COMMIT_DATE=${commitDate}`,
+          "docker:cli",
+          "docker", "compose", "up", "-d", "--build",
+        ], undefined, 300000);
 
-      res.writeHead(422, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        error: "Build falhou (rollback automatico)",
-        log: deployLog.join("\n"),
-      }));
-    }
+        // If we somehow survive (shouldn't happen), clean up
+        await cleanupHostDir(hostStaging).catch(() => {});
+        await cleanupHostDir(`${projectDir}/src.bak`).catch(() => {});
+      } catch (buildErr) {
+        logger.error({ err: buildErr }, "Update build FAILED — rolling back");
+        try {
+          await execAsyncOutput("docker", [
+            "run", "--rm",
+            "-v", `${projectDir}:${projectDir}`,
+            "alpine:latest",
+            "sh", "-c",
+            `rm -rf ${projectDir}/src && cp -r ${projectDir}/src.bak ${projectDir}/src && rm -rf ${projectDir}/src.bak`,
+          ]);
+          logger.info("Update: rollback complete");
+        } catch (rbErr) {
+          logger.error({ err: rbErr }, "Update: rollback FAILED");
+        }
+        await cleanupHostDir(hostStaging).catch(() => {});
+      }
+    });
   } catch (err) {
     logger.error({ err }, "Update failed");
     if (!res.headersSent) {
