@@ -52,11 +52,11 @@ export interface WebAgentBridge {
   /** Stop edit mode (returns error message or empty string on success) */
   stopEditMode(): Promise<string>;
   /** Get conversation history for a user */
-  getConversationHistory(userPhone: string, limit?: number): Promise<Array<{ role: string; content: string; audio_url?: string; image_urls?: string[]; message_type?: string }>>;
+  getConversationHistory(userPhone: string, limit?: number): Promise<Array<{ role: string; content: string; created_at?: string; audio_url?: string; image_urls?: string[]; message_type?: string }>>;
   /** Get message history for a sub-agent session */
-  getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string }>>;
+  getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[] }>>;
   /** Get message history for the active edit session */
-  getEditHistory(): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string }>>;
+  getEditHistory(): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[] }>>;
   /** Send audio transcription update to all web clients */
   sendTranscription(audioUrl: string, transcription: string): void;
   /** Clear conversation history for a user */

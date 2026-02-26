@@ -18,6 +18,7 @@ export interface Memory {
 export interface ConversationMessage {
   role: "user" | "assistant" | "system";
   content: string;
+  created_at?: string;
   message_type?: "text" | "tool_use";
   audio_url?: string;
   image_urls?: string[];
@@ -240,7 +241,7 @@ export class MemoryService {
   ): Promise<ConversationMessage[]> {
     const maxMessages = limit || config.conversationHistoryLimit;
     const result = await query(
-      `SELECT role, content, audio_url, image_url, message_type FROM conversations
+      `SELECT role, content, created_at, audio_url, image_url, message_type FROM conversations
        WHERE user_phone = $1
        ORDER BY created_at DESC
        LIMIT $2`,
@@ -249,6 +250,7 @@ export class MemoryService {
     // Parse image_url: could be JSON array string or legacy single URL
     return result.rows.reverse().map((row: any) => {
       const msg: ConversationMessage = { role: row.role, content: row.content };
+      if (row.created_at) msg.created_at = row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at;
       if (row.message_type) msg.message_type = row.message_type;
       if (row.audio_url) msg.audio_url = row.audio_url;
       if (row.image_url) {

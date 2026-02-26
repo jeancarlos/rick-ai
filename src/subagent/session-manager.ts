@@ -252,7 +252,7 @@ export class SessionManager {
   /**
    * Send a user message to an existing session.
    */
-  async sendToSession(sessionId: string, message: string, images?: MediaAttachment[]): Promise<void> {
+  async sendToSession(sessionId: string, message: string, images?: MediaAttachment[], audioUrl?: string, imageUrls?: string[]): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session || !session.containerId) {
       throw new Error(`No session with id ${sessionId}`);
@@ -263,7 +263,7 @@ export class SessionManager {
     session.updatedAt = Date.now();
 
     // Persist user message and broadcast to session subscribers
-    this.saveSessionMessage(sessionId, "user", message).catch(() => {});
+    this.saveSessionMessage(sessionId, "user", message, "text", audioUrl, imageUrls).catch(() => {});
     if (this.onSessionMessage) {
       this.onSessionMessage(sessionId, "user", message);
     }
@@ -318,13 +318,30 @@ export class SessionManager {
     return live.length;
   }
 
-  async getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string }>> {
+  async getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[] }>> {
     try {
       const result = await query(
-        `SELECT role, content, created_at, message_type FROM session_messages WHERE session_id = $1 ORDER BY created_at ASC`,
+        `SELECT role, content, created_at, message_type, audio_url, image_urls FROM session_messages WHERE session_id = $1 ORDER BY created_at ASC`,
         [sessionId]
       );
-      return result.rows;
+      return result.rows.map((row: any) => {
+        const msg: { role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[] } = {
+          role: row.role,
+          content: row.content,
+          created_at: row.created_at,
+        };
+        if (row.message_type) msg.message_type = row.message_type;
+        if (row.audio_url) msg.audio_url = row.audio_url;
+        if (row.image_urls) {
+          try {
+            const parsed = JSON.parse(row.image_urls);
+            msg.image_urls = Array.isArray(parsed) ? parsed : [row.image_urls];
+          } catch {
+            msg.image_urls = [row.image_urls];
+          }
+        }
+        return msg;
+      });
     } catch (err) {
       logger.warn({ err, sessionId }, "Failed to load session history");
       return [];
@@ -555,11 +572,19 @@ export class SessionManager {
 
   // ==================== MESSAGE PERSISTENCE ====================
 
-  private async saveSessionMessage(sessionId: string, role: string, content: string, messageType: string = "text"): Promise<void> {
+  private async saveSessionMessage(
+    sessionId: string,
+    role: string,
+    content: string,
+    messageType: string = "text",
+    audioUrl?: string,
+    imageUrls?: string[]
+  ): Promise<void> {
     try {
+      const imageUrlsJson = imageUrls && imageUrls.length > 0 ? JSON.stringify(imageUrls) : null;
       await query(
-        `INSERT INTO session_messages (session_id, role, content, message_type) VALUES ($1, $2, $3, $4)`,
-        [sessionId, role, content, messageType]
+        `INSERT INTO session_messages (session_id, role, content, message_type, audio_url, image_urls) VALUES ($1, $2, $3, $4, $5, $6)`,
+        [sessionId, role, content, messageType, audioUrl || null, imageUrlsJson]
       );
     } catch (err) {
       logger.warn({ err, sessionId, role }, "Failed to save session message");

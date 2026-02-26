@@ -352,10 +352,14 @@ export class Agent {
     const systemPrompt = this.buildSystemPrompt(userName, memoryContext, semanticContext);
 
     const messages: LLMMessage[] = [
-      ...history.map((h) => ({
-        role: h.role as "user" | "assistant",
-        content: h.content,
-      })),
+      // Filter out tool_use messages — they are notifications (e.g. "[tool] Pesquisando...")
+      // and should not be included in the LLM conversation context.
+      ...history
+        .filter((h) => h.message_type !== "tool_use")
+        .map((h) => ({
+          role: h.role as "user" | "assistant",
+          content: h.content,
+        })),
       { role: "user" as const, content: text, media },
     ];
 
@@ -723,7 +727,7 @@ export class Agent {
     // CASE 2: Continuation — relay to the most recent done session
     await this.memory.saveMessage(userPhone, "user", text, undefined, undefined, audioUrl, imageUrls);
 
-    this.sessionManager.sendToSession(mostRecent.id, text, imageMedias).catch(async (err) => {
+    this.sessionManager.sendToSession(mostRecent.id, text, imageMedias, audioUrl, imageUrls).catch(async (err) => {
       logger.error({ err }, "Sub-agent relay failed");
       await this.connectorManager.sendMessage(
         connectorName, userPhone,
@@ -1881,7 +1885,7 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         return this.sessionManager.getSessionHistory(sessionId);
       },
 
-      getEditHistory: async (): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string }>> => {
+      getEditHistory: async (): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[] }>> => {
         if (!this.editSession) return [];
         try {
           const { query: dbQuery } = await import("./memory/db.js");
@@ -1889,7 +1893,24 @@ Retorne APENAS as linhas de extracao, nada mais.`;
             `SELECT role, content, created_at, message_type, audio_url, image_urls FROM session_messages WHERE session_id = $1 ORDER BY created_at ASC`,
             [this.editSession.id]
           );
-          return result.rows;
+          return result.rows.map((row: any) => {
+            const msg: { role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[] } = {
+              role: row.role,
+              content: row.content,
+              created_at: row.created_at,
+            };
+            if (row.message_type) msg.message_type = row.message_type;
+            if (row.audio_url) msg.audio_url = row.audio_url;
+            if (row.image_urls) {
+              try {
+                const parsed = JSON.parse(row.image_urls);
+                msg.image_urls = Array.isArray(parsed) ? parsed : [row.image_urls];
+              } catch {
+                msg.image_urls = [row.image_urls];
+              }
+            }
+            return msg;
+          });
         } catch (err) {
           logger.warn({ err }, "Failed to load edit session history");
           return [];
