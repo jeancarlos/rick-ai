@@ -2436,7 +2436,8 @@ function handleServerMessage(msg) {
       // Detect deploy/publish start to trigger auto-reload after server restart
       if (from === 'agent' && msg.text && (
         msg.text.includes('Iniciando deploy seguro') ||
-        msg.text.includes('Iniciando deploy antes do push')
+        msg.text.includes('Iniciando deploy antes do push') ||
+        msg.text.includes('Iniciando deploy + push')
       )) {
         deployInProgress = true;
       }
