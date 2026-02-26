@@ -48,6 +48,12 @@ export interface ConnectorCapabilities {
 export interface SendMessageOptions {
   /** Sub-agent session ID — Web UI uses this to route messages to the correct session panel */
   sessionId?: string;
+  /**
+   * Type of the agent message.
+   * - "text"     → normal assistant response (type 2)
+   * - "tool_use" → tool execution notification (type 3); some connectors (e.g. WhatsApp) filter these out
+   */
+  messageType?: "text" | "tool_use";
 }
 
 /**

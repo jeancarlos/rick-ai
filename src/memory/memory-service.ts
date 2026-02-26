@@ -18,6 +18,7 @@ export interface Memory {
 export interface ConversationMessage {
   role: "user" | "assistant" | "system";
   content: string;
+  message_type?: "text" | "tool_use";
   audio_url?: string;
   image_urls?: string[];
 }
@@ -199,14 +200,15 @@ export class MemoryService {
     modelUsed?: string,
     tokensUsed?: number,
     audioUrl?: string,
-    imageUrls?: string[]
+    imageUrls?: string[],
+    messageType?: "text" | "tool_use"
   ): Promise<void> {
     // Store image URLs as JSON array string in image_url column
     const imageUrlValue = imageUrls && imageUrls.length > 0 ? JSON.stringify(imageUrls) : null;
     await query(
-      `INSERT INTO conversations (user_phone, role, content, model_used, tokens_used, audio_url, image_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [userPhone, role, content, modelUsed || null, tokensUsed || null, audioUrl || null, imageUrlValue]
+      `INSERT INTO conversations (user_phone, role, content, model_used, tokens_used, audio_url, image_url, message_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [userPhone, role, content, modelUsed || null, tokensUsed || null, audioUrl || null, imageUrlValue, messageType || "text"]
     );
 
     // Prune old conversation messages for this user (keep most recent N)
@@ -238,7 +240,7 @@ export class MemoryService {
   ): Promise<ConversationMessage[]> {
     const maxMessages = limit || config.conversationHistoryLimit;
     const result = await query(
-      `SELECT role, content, audio_url, image_url FROM conversations 
+      `SELECT role, content, audio_url, image_url, message_type FROM conversations
        WHERE user_phone = $1
        ORDER BY created_at DESC
        LIMIT $2`,
@@ -247,6 +249,7 @@ export class MemoryService {
     // Parse image_url: could be JSON array string or legacy single URL
     return result.rows.reverse().map((row: any) => {
       const msg: ConversationMessage = { role: row.role, content: row.content };
+      if (row.message_type) msg.message_type = row.message_type;
       if (row.audio_url) msg.audio_url = row.audio_url;
       if (row.image_url) {
         try {

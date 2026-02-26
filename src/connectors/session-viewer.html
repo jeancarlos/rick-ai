@@ -24,6 +24,8 @@ body {
   background: var(--bg);
   color: var(--text);
   height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
@@ -78,6 +80,7 @@ body {
 /* Messages */
 .messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 16px;
   display: flex;
@@ -395,7 +398,7 @@ body {
 <div class="connection-bar" id="connection-bar">Reconectando...</div>
 
 <div class="messages" id="messages">
-  <div class="empty-state" id="empty-state">Aguardando mensagens do sub-agente...</div>
+  <div class="empty-state" id="empty-state">Aguardando mensagem…</div>
   <div class="typing-indicator" id="typing-indicator">
     <span></span><span></span><span></span>
   </div>
@@ -516,7 +519,7 @@ function appendMessage(text, role) {
 
   var time = document.createElement('div');
   time.className = 'time';
-  time.textContent = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  time.textContent = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   div.appendChild(time);
 
   container.insertBefore(div, typing);
@@ -537,7 +540,7 @@ function appendHistoryMessage(text, role, timestamp) {
   var time = document.createElement('div');
   time.className = 'time';
   var t = timestamp ? new Date(timestamp) : new Date();
-  time.textContent = t.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  time.textContent = t.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   div.appendChild(time);
 
   container.insertBefore(div, typing);

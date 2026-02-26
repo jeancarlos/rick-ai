@@ -148,9 +148,10 @@
   }
 
   .sidebar.edit-mode .session-item,
-  .sidebar.edit-mode .session-kill {
+  .sidebar.edit-mode .session-kill,
+  .sidebar.edit-mode .new-session-btn {
     pointer-events: none;
-    opacity: 0.72;
+    opacity: 0.4;
   }
 
   .sidebar-header-text {
@@ -322,11 +323,43 @@
   .session-item .session-clear:hover { background: var(--danger); color: white; }
 
   .session-divider {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     padding: 8px 16px 4px;
     font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-muted);
+  }
+
+  .new-session-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    flex-shrink: 0;
+  }
+
+  .new-session-btn:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+  }
+
+  .new-session-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   /* Edit mode pulsing on main session */
@@ -440,13 +473,14 @@
   }
 
   .message {
+    flex-shrink: 0;
     max-width: 85%;
     padding: 10px 14px;
     border-radius: 16px;
     font-size: 0.95rem;
     line-height: 1.5;
     word-wrap: break-word;
-    white-space: pre-wrap;
+    white-space: normal;
     position: relative;
     animation: msgIn 0.2s ease-out;
   }
@@ -499,12 +533,162 @@
     padding: 0;
   }
 
+  .message h1, .message h2, .message h3 {
+    margin: 10px 0 4px;
+    font-weight: 700;
+    line-height: 1.3;
+    white-space: normal;
+  }
+
+  .message h1 { font-size: 1.1em; }
+  .message h2 { font-size: 1.0em; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 3px; }
+  .message h3 { font-size: 0.95em; color: var(--text-muted); }
+
+  .message hr {
+    border: none;
+    border-top: 1px solid rgba(255,255,255,0.12);
+    margin: 10px 0;
+  }
+
+  .message ul, .message ol {
+    margin: 4px 0;
+    padding-left: 22px;
+    white-space: normal;
+  }
+
+  .message li {
+    margin: 2px 0;
+    line-height: 1.5;
+  }
+
+  .message pre .code-lang {
+    display: block;
+    font-size: 0.75em;
+    color: #8b949e;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
   /* Media messages — override pre-wrap to allow block layout */
   .message:has(.audio-message),
   .message:has(.image-message) {
     white-space: normal;
     min-width: 260px;
   }
+
+  /* ── Tool-use terminal block ───────────────────────────────────────────── */
+  .tool-use-block {
+    flex-shrink: 0;
+    align-self: flex-start;
+    max-width: 85%;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    overflow: hidden;
+    animation: msgIn 0.2s ease-out;
+    font-family: 'SF Mono', 'Cascadia Code', Consolas, 'Courier New', monospace;
+    font-size: 0.8rem;
+  }
+
+  .tool-use-block .terminal-header {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 6px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    user-select: none;
+    cursor: pointer;
+  }
+
+  .tool-use-block .terminal-title {
+    flex: 1;
+    text-align: center;
+    font-size: 0.75rem;
+    color: #8b949e;
+    letter-spacing: 0.04em;
+  }
+
+  .tool-use-block .terminal-body {
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 240px;
+    max-height: 260px;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .tool-use-block .terminal-body::-webkit-scrollbar { width: 4px; }
+  .tool-use-block .terminal-body::-webkit-scrollbar-track { background: transparent; }
+  .tool-use-block .terminal-body::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+
+  .tool-use-block .terminal-line {
+    display: flex;
+    gap: 7px;
+    align-items: baseline;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .tool-use-block .tl-time {
+    color: #484f58;
+    font-size: 0.68rem;
+    flex-shrink: 0;
+    min-width: 32px;
+    user-select: none;
+  }
+
+  .tool-use-block .tl-arrow {
+    color: #3fb950;
+    flex-shrink: 0;
+    user-select: none;
+  }
+
+  .tool-use-block .tl-tool {
+    color: #79c0ff;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+
+  .tool-use-block .tl-arg {
+    color: #7ee787;
+    opacity: 0.85;
+    word-break: break-all;
+    min-width: 0;
+  }
+
+  .tool-use-block .tl-plain {
+    color: #7ee787;
+    word-break: break-all;
+  }
+
+  .tool-use-block .terminal-footer {
+    display: none;
+  }
+  .tool-use-block .terminal-toggle {
+    font-size: 0.72rem;
+    color: #8b949e;
+    flex-shrink: 0;
+    transition: transform 0.2s ease;
+    line-height: 1;
+  }
+
+  .tool-use-block.minimized .terminal-toggle {
+    transform: rotate(-90deg);
+  }
+
+  .tool-use-block.minimized .terminal-header {
+    border-bottom: none;
+  }
+
+  .tool-use-block.minimized .terminal-body {
+    display: none;
+  }
+  /* ────────────────────────────────────────────────────────────────────────── */
 
   /* Image messages */
   .image-message {
@@ -581,6 +765,7 @@
 
   /* Typing indicator */
   .typing-indicator {
+    flex-shrink: 0;
     display: none;
     align-self: flex-start;
     padding: 10px 14px;
@@ -610,6 +795,7 @@
 
   /* QR Code overlay */
   .qr-overlay {
+    flex-shrink: 0;
     display: none;
     align-self: flex-start;
     background: var(--bubble-agent);
@@ -1604,8 +1790,11 @@
           </button>
         </div>
 
-        <!-- Ephemeral sessions divider -->
-        <div class="session-divider" id="ephemeral-divider" style="display:none;">Sub-agentes</div>
+        <!-- Ephemeral sessions divider (always visible for the + button) -->
+        <div class="session-divider" id="ephemeral-divider">
+          <span>Sub-agentes</span>
+          <button class="new-session-btn" id="new-session-btn" onclick="startNewSubAgent()" title="Nova sessao em branco">+</button>
+        </div>
 
         <!-- Ephemeral sessions will be inserted here -->
         <div id="ephemeral-sessions"></div>
@@ -2102,6 +2291,7 @@ var pendingOAuth = { provider: null, authUrl: '' };
 var oauthPopup = null;
 var oauthPopupTimer = null;
 var sendInFlight = false;
+var deployInProgress = false;
 
 // ==================== LOGIN ====================
 function doLogout() {
@@ -2195,6 +2385,12 @@ function handleServerMessage(msg) {
       authenticated = true;
       reconnectAttempts = 0;
       try { localStorage.setItem('rick_pwd', password); } catch(e) {}
+      // After a deploy the server restarts — reload the page to pick up the new frontend
+      if (deployInProgress) {
+        deployInProgress = false;
+        location.reload();
+        break;
+      }
       document.getElementById('login-screen').style.display = 'none';
       document.getElementById('app-screen').style.display = 'block';
       document.getElementById('msg-input').focus();
@@ -2239,9 +2435,13 @@ function handleServerMessage(msg) {
         }
         break;
       }
-      storeMessage(sid, msg.text, from, msg.audioUrl || null, echoImageUrls);
+      // Detect deploy start to trigger auto-reload after server restart
+      if (from === 'agent' && msg.text && msg.text.includes('Iniciando deploy seguro')) {
+        deployInProgress = true;
+      }
+      storeMessage(sid, msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null);
       if (sid === currentSessionId) {
-        appendMessageToDOM(msg.text, from, msg.audioUrl || null, echoImageUrls);
+        appendMessageToDOM(msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null);
       }
       break;
 
@@ -2333,6 +2533,10 @@ function handleServerMessage(msg) {
       updateEphemeralSessions(msg.sessions || []);
       break;
 
+    case 'edit_history':
+      loadEditHistory(msg.messages || []);
+      break;
+
     case 'edit_mode':
       editModeActive = !!msg.active;
       updateEditModeUI();
@@ -2392,13 +2596,13 @@ function updateEphemeralSessions(sessions) {
   var container = document.getElementById('ephemeral-sessions');
   var divider = document.getElementById('ephemeral-divider');
 
+  // Always show the divider (it contains the "+" button for new sessions)
+  divider.style.display = 'flex';
+
   if (ephemeralSessions.length === 0) {
     container.innerHTML = '';
-    divider.style.display = 'none';
     return;
   }
-
-  divider.style.display = 'block';
 
   var html = '';
   for (var i = 0; i < ephemeralSessions.length; i++) {
@@ -2483,6 +2687,24 @@ function confirmClearHistory() {
   }
 }
 
+function startNewSubAgent() {
+  if (editModeActive) {
+    showToast('Sessoes bloqueadas durante o modo /edit');
+    return;
+  }
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    showToast('Conexao offline');
+    return;
+  }
+  var btn = document.getElementById('new-session-btn');
+  if (btn) btn.disabled = true;
+  ws.send(JSON.stringify({ type: 'start_subagent' }));
+  // Re-enable button after a short delay to prevent double-clicks
+  setTimeout(function() {
+    if (btn) btn.disabled = false;
+  }, 3000);
+}
+
 function killSession(sessionId) {
   if (editModeActive) {
     showToast('Sessoes bloqueadas durante o modo /edit');
@@ -2503,13 +2725,14 @@ function killSession(sessionId) {
   updateEphemeralSessions(ephemeralSessions);
 }
 
-function storeMessage(sessionId, text, from, audioUrl, imageUrls) {
+function storeMessage(sessionId, text, from, audioUrl, imageUrls, messageType) {
   if (!sessionMessages[sessionId]) {
     sessionMessages[sessionId] = [];
   }
   var entry = { text: text, from: from, time: new Date() };
   if (audioUrl) entry.audioUrl = audioUrl;
   if (imageUrls) entry.imageUrls = imageUrls;
+  if (messageType) entry.messageType = messageType;
   sessionMessages[sessionId].push(entry);
 }
 
@@ -2523,18 +2746,39 @@ function renderSessionMessages(sessionId) {
   container.appendChild(qr);
 
   var messages = sessionMessages[sessionId] || [];
+  var currentToolBlock = null; // active terminal block being built
+
   for (var i = 0; i < messages.length; i++) {
     var m = messages[i];
-    var div = document.createElement('div');
-    div.className = 'message ' + m.from;
-    div.innerHTML = renderMessageContent(m.text, m.audioUrl, m.imageUrls);
 
-    var time = document.createElement('div');
-    time.className = 'time';
-    time.textContent = m.time.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    div.appendChild(time);
+    if (m.messageType === 'tool_use') {
+      // Reuse or create a terminal block for consecutive tool_use messages
+      if (!currentToolBlock) {
+        currentToolBlock = makeToolUseBlock();
+        container.insertBefore(currentToolBlock, typing);
+      }
+      var body = currentToolBlock.querySelector('.terminal-body');
+      var line = document.createElement('div');
+      line.className = 'terminal-line';
+      var lineTimeStr = m.time.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      line.innerHTML = formatToolLine(m.text, lineTimeStr);
+      body.appendChild(line);
+      body.scrollTop = body.scrollHeight;
+    } else {
+      // Non-tool_use message breaks the current terminal group
+      currentToolBlock = null;
 
-    container.insertBefore(div, typing);
+      var div = document.createElement('div');
+      div.className = 'message ' + m.from;
+      div.innerHTML = renderMessageContent(m.text, m.audioUrl, m.imageUrls);
+
+      var time = document.createElement('div');
+      time.className = 'time';
+      time.textContent = m.time.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      div.appendChild(time);
+
+      container.insertBefore(div, typing);
+    }
   }
 
   scrollToBottom();
@@ -2550,6 +2794,7 @@ function loadHistory(messages) {
     var entry = { text: msg.content, from: from, time: new Date() };
     if (msg.audio_url) entry.audioUrl = msg.audio_url;
     if (msg.image_urls) entry.imageUrls = msg.image_urls;
+    if (msg.message_type) entry.messageType = msg.message_type;
     sessionMessages['main'].push(entry);
   }
   // Only render if we're viewing main session
@@ -2558,17 +2803,140 @@ function loadHistory(messages) {
   }
 }
 
-function appendMessageToDOM(text, from, audioUrl, imageUrls) {
+// Restores edit session messages after F5 reload (populated from session_messages table)
+function loadEditHistory(messages) {
+  sessionMessages['edit'] = [];
+  for (var j = 0; j < messages.length; j++) {
+    var ehMsg = messages[j];
+    var ehFrom = ehMsg.role === 'assistant' ? 'agent' : 'user';
+    var ehTime = ehMsg.created_at ? new Date(ehMsg.created_at) : new Date();
+    sessionMessages['edit'].push({ text: ehMsg.content, from: ehFrom, time: ehTime });
+  }
+  // Re-render if we're currently viewing the edit session
+  if (currentSessionId === 'edit') {
+    renderSessionMessages('edit');
+  }
+}
+
+function minimizeAllToolBlocks(except) {
+  var blocks = document.querySelectorAll('.tool-use-block');
+  for (var i = 0; i < blocks.length; i++) {
+    if (blocks[i] !== except) {
+      blocks[i].classList.add('minimized');
+    }
+  }
+}
+
+function formatToolLine(text, timeStr) {
+  // Monta o HTML de uma linha de ferramenta: horário + seta + tool name + args
+  var parts = [];
+  var timeEl = '<span class="tl-time">' + timeStr + '</span>';
+  var arrowEl = '<span class="tl-arrow">▸</span>';
+
+  // Procura segmentos entre backticks
+  var segments = [];
+  var regex = /`([^`]*)`/g;
+  var match;
+  var lastIdx = 0;
+  var first = true;
+
+  while ((match = regex.exec(text)) !== null) {
+    // texto antes do match
+    if (match.index > lastIdx) {
+      var plain = text.slice(lastIdx, match.index).trim();
+      if (plain) segments.push({ type: 'plain', val: plain });
+    }
+    if (first) {
+      segments.push({ type: 'tool', val: match[1] });
+      first = false;
+    } else {
+      segments.push({ type: 'arg', val: match[1] });
+    }
+    lastIdx = regex.lastIndex;
+  }
+  // Texto restante
+  if (lastIdx < text.length) {
+    var remainder = text.slice(lastIdx).trim();
+    if (remainder) segments.push({ type: first ? 'tool' : 'plain', val: remainder });
+  }
+
+  // Se nenhum backtick encontrado, trata o texto como plain
+  if (segments.length === 0) {
+    segments.push({ type: 'plain', val: text });
+  }
+
+  var contentHtml = segments.map(function(s) {
+    var escaped = s.val.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (s.type === 'tool') return '<span class="tl-tool">' + escaped + '</span>';
+    if (s.type === 'arg')  return '<span class="tl-arg">' + escaped + '</span>';
+    return '<span class="tl-plain">' + escaped + '</span>';
+  }).join(' ');
+
+  return timeEl + arrowEl + contentHtml;
+}
+
+function makeToolUseBlock() {
+  // Minimiza todos os blocos existentes antes de criar o novo
+  minimizeAllToolBlocks(null);
+
+  var block = document.createElement('div');
+  block.className = 'tool-use-block';
+  block.innerHTML =
+    '<div class="terminal-header">' +
+      '<div class="terminal-title">ferramentas</div>' +
+      '<div class="terminal-toggle">▾</div>' +
+    '</div>' +
+    '<div class="terminal-body"></div>';
+
+  var header = block.querySelector('.terminal-header');
+  header.addEventListener('click', function() {
+    if (block.classList.contains('minimized')) {
+      // Maximiza este e minimiza todos os outros
+      minimizeAllToolBlocks(block);
+      block.classList.remove('minimized');
+    } else {
+      // Minimiza este
+      block.classList.add('minimized');
+    }
+  });
+
+  return block;
+}
+
+function appendMessageToDOM(text, from, audioUrl, imageUrls, messageType) {
   var container = document.getElementById('messages-main');
   var typing = document.getElementById('typing-indicator');
 
+  if (messageType === 'tool_use') {
+    // Check if the previous visible element (before typing indicator) is already a terminal block
+    var prevEl = typing.previousElementSibling;
+    var block;
+    if (prevEl && prevEl.classList.contains('tool-use-block')) {
+      block = prevEl;
+    } else {
+      block = makeToolUseBlock();
+      container.insertBefore(block, typing);
+    }
+    // Append line to terminal body
+    var body = block.querySelector('.terminal-body');
+    var line = document.createElement('div');
+    line.className = 'terminal-line';
+    var lineTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    line.innerHTML = formatToolLine(text, lineTime);
+    body.appendChild(line);
+    body.scrollTop = body.scrollHeight;
+    scrollToBottom();
+    return;
+  }
+
+  // Regular message — any non-tool_use message breaks the terminal grouping
   var div = document.createElement('div');
   div.className = 'message ' + from;
   div.innerHTML = renderMessageContent(text, audioUrl, imageUrls);
 
   var time = document.createElement('div');
   time.className = 'time';
-  time.textContent = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  time.textContent = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   div.appendChild(time);
 
   container.insertBefore(div, typing);
@@ -2701,32 +3069,108 @@ function handleTranscription(audioUrl, transcription) {
 function renderText(text) {
   if (!text) return '';
 
-  var html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // 1. Escape HTML
+  var escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 
-  // Code blocks (```...```)
-  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, function(match, lang, code) {
-    return '<pre><code>' + code.trim() + '</code></pre>';
+  // 2. Extrair blocos de código (substituir por placeholder para não processar internamente)
+  var codeBlocks = [];
+  escaped = escaped.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
+    var langLabel = lang ? '<span class="code-lang">' + lang + '</span>' : '';
+    var block = '<pre>' + langLabel + '<code>' + code.trim() + '</code></pre>';
+    codeBlocks.push(block);
+    return '\x00CB' + (codeBlocks.length - 1) + '\x00';
   });
 
-  // Inline code (`...`)
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // 3. Inline code
+  escaped = escaped.replace(/`([^`\n]+)`/g, '<code>$1</code>');
 
-  // URLs — convert to clickable links (before markdown so bold/italic don't break URLs)
-  html = html.replace(/(https?:\/\/[^\s<>"'`]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  // 4. URLs clicáveis
+  escaped = escaped.replace(/(https?:\/\/[^\s<>"']+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
 
-  // Bold (**...**)
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // 5. Processamento linha a linha (headers, listas, hr)
+  function inlineFmt(t) {
+    // Bold (**...**)
+    t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // Italic (*...*)  — simples asterisco = itálico
+    t = t.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
+    // Italic (_..._)
+    t = t.replace(/(?<!_)_([^_\n]+)_(?!_)/g, '<em>$1</em>');
+    // Strikethrough (~~...~~)
+    t = t.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+    return t;
+  }
 
-  // Bold (*...*)
-  html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<strong>$1</strong>');
+  var lines = escaped.split('\n');
+  var result = [];
+  var inList = false;
+  var listType = null;
 
-  // Italic (_..._)
-  html = html.replace(/(?<!_)_([^_]+)_(?!_)/g, '<em>$1</em>');
+  function closeList() {
+    if (inList) { result.push('</' + listType + '>'); inList = false; listType = null; }
+  }
 
-  // Strikethrough (~...~)
-  html = html.replace(/~([^~]+)~/g, '<del>$1</del>');
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
 
-  return html;
+    // Placeholder de bloco de código
+    if (/\x00CB\d+\x00/.test(line)) {
+      closeList();
+      result.push(line.replace(/\x00CB(\d+)\x00/g, function(_, idx) { return codeBlocks[+idx]; }));
+      continue;
+    }
+
+    // Linha horizontal (--- / *** / ___)
+    if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      closeList();
+      result.push('<hr>');
+      continue;
+    }
+
+    // Cabeçalhos (# ## ###)
+    var hm = line.match(/^(#{1,3})\s+(.+)$/);
+    if (hm) {
+      closeList();
+      var lvl = hm[1].length;
+      result.push('<h' + lvl + '>' + inlineFmt(hm[2]) + '</h' + lvl + '>');
+      continue;
+    }
+
+    // Lista não-ordenada (- / * / +)
+    var ulm = line.match(/^[\-\*\+]\s+(.+)$/);
+    if (ulm) {
+      if (!inList || listType !== 'ul') { closeList(); result.push('<ul>'); inList = true; listType = 'ul'; }
+      result.push('<li>' + inlineFmt(ulm[1]) + '</li>');
+      continue;
+    }
+
+    // Lista ordenada (1. 2. …)
+    var olm = line.match(/^\d+\.\s+(.+)$/);
+    if (olm) {
+      if (!inList || listType !== 'ol') { closeList(); result.push('<ol>'); inList = true; listType = 'ol'; }
+      result.push('<li>' + inlineFmt(olm[1]) + '</li>');
+      continue;
+    }
+
+    // Linha vazia
+    if (line.trim() === '') {
+      closeList();
+      result.push('<br>');
+      continue;
+    }
+
+    closeList();
+    result.push(inlineFmt(line) + '<br>');
+  }
+
+  closeList();
+
+  var finalHtml = result.join('');
+  // Remove <br> extras no final
+  finalHtml = finalHtml.replace(/(<br>\s*)+$/, '');
+  return finalHtml;
 }
 
 function showTyping(composing) {
@@ -3066,7 +3510,8 @@ function handlePaste(event) {
       (function(item) {
         var file = item.getAsFile();
         if (!file) return;
-        var ext = item.type.split('/')[1] || 'png';
+        var mimeType = item.type || file.type || 'image/png';
+        var ext = mimeType.split('/')[1] || 'png';
         var name = 'imagem_' + Date.now() + '.' + ext;
         var readPromise = new Promise(function(resolve) {
           var reader = new FileReader();
@@ -3074,7 +3519,7 @@ function handlePaste(event) {
             var base64 = e.target.result.split(',')[1];
             pendingFiles.push({
               base64: base64,
-              mimeType: item.type,
+              mimeType: mimeType,
               name: name,
               previewUrl: e.target.result
             });

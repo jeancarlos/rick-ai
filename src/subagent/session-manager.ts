@@ -494,6 +494,11 @@ export class SessionManager {
   // ==================== OUTPUT ROUTING ====================
 
   private async sendToUser(session: SubAgentSession, text: string): Promise<void> {
+    // Rota para o conector de origem (WhatsApp, Web, etc.) usando connectorName e userId da sessão
+    this.connectorManager.sendMessage(session.connectorName, session.userId, text).catch((err) => {
+      logger.warn({ err, sessionId: session.id, connector: session.connectorName }, "sendToUser: failed to send via connector");
+    });
+    // Broadcast para subscribers da sessão na web UI (página /s/:id)
     if (this.onSessionMessage) {
       this.onSessionMessage(session.id, "agent", text);
     }

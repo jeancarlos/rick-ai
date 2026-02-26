@@ -16,7 +16,7 @@ import qrcode from "qrcode-terminal";
 import pino from "pino";
 import path from "path";
 import { promises as fs } from "node:fs";
-import type { Connector, ConnectorCapabilities, IncomingMessage } from "./types.js";
+import type { Connector, ConnectorCapabilities, IncomingMessage, SendMessageOptions } from "./types.js";
 import type { ConnectorManager } from "./connector-manager.js";
 import { MemoryService } from "../memory/memory-service.js";
 import { MediaAttachment } from "../llm/types.js";
@@ -190,7 +190,12 @@ export class WhatsAppConnector implements Connector {
     await this.start();
   }
 
-  async sendMessage(userId: string, text: string): Promise<void> {
+  async sendMessage(userId: string, text: string, options?: SendMessageOptions): Promise<void> {
+    // Mensagens de tool execution (tipo 3) não devem ser enviadas ao WhatsApp
+    if (options?.messageType === "tool_use") {
+      logger.debug({ userId }, "WhatsApp: skipping tool_use message");
+      return;
+    }
     const jid = this.getSelfChatJid();
     if (!jid || !this.sock) {
       logger.warn("WhatsApp: cannot send message — not connected");

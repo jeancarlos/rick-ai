@@ -6,7 +6,7 @@ import { VectorMemoryService } from "./memory/vector-memory-service.js";
 import { ClaudeOAuthService } from "./auth/claude-oauth.js";
 import { OpenAIOAuthService } from "./auth/openai-oauth.js";
 import { SessionManager, getSessionRickName } from "./subagent/session-manager.js";
-import { EditSession, AuthExpiredCallback, GetFreshTokenCallback, GptFallbackCallback } from "./subagent/edit-session.js";
+import { EditSession, AuthExpiredCallback, GetFreshTokenCallback, GptFallbackCallback, SaveHistoryFn } from "./subagent/edit-session.js";
 import { classifyTask } from "./subagent/classifier.js";
 import { PendingDelegation } from "./subagent/types.js";
 import type { ConnectorManager } from "./connectors/connector-manager.js";
@@ -184,30 +184,51 @@ export class Agent {
       }
 
       // Audio: pre-transcribe with Gemini and fold into text
-      let editMedia: MediaAttachment | undefined = media;
+      // Collect all image medias to forward to edit session (supports multiple images)
+      let editMedias: MediaAttachment[] = [];
       if (media?.mimeType.startsWith("audio/")) {
         const transcription = await this.transcribeAudioWithGemini(media);
         const prefix = fullText.trim() ? `${fullText.trim()}\n\n` : "";
         fullText = `${prefix}[Áudio transcrito: "${transcription}"]`;
-        editMedia = imageMedias?.[0] || undefined; // use first image if combined audio+image
+        editMedias = imageMedias ?? []; // use all images if combined audio+image
         // Send transcription to frontend so "Processando audio..." is replaced
         if (audioUrl && this.webBridge) {
           this.webBridge.sendTranscription(audioUrl, transcription);
         }
+      } else if (media?.mimeType.startsWith("image/")) {
+        // Primary media is an image — include it plus any extra images in imageMedias
+        const extras = (imageMedias ?? []).filter((m) => m !== media);
+        editMedias = [media, ...extras];
+      } else if (imageMedias && imageMedias.length > 0) {
+        // No primary media (or non-image primary) — forward all imageMedias
+        editMedias = imageMedias;
       }
-      // Safety net: if connector sent images only in imageMedias, still forward one image to edit session.
-      if (!editMedia && imageMedias && imageMedias.length > 0) {
-        editMedia = imageMedias[0];
+
+      logger.info(
+        { editMediaCount: editMedias.length, editMediaMimes: editMedias.map((m) => m.mimeType), textLen: fullText.length },
+        "Edit mode: forwarding to Claude Code"
+      );
+
+      // Save user message to edit session history (persists across F5 reloads)
+      const editSessionIdForSave = this.editSession.id;
+      try {
+        const { query: dbSaveUser } = await import("./memory/db.js");
+        await dbSaveUser(
+          `INSERT INTO session_messages (session_id, role, content) VALUES ($1, $2, $3)`,
+          [editSessionIdForSave, "user", fullText]
+        );
+      } catch (err) {
+        logger.warn({ err }, "Failed to save edit session user message");
       }
 
       // First message uses -p, subsequent use --continue
       if (!this.editFirstPromptSent) {
         this.editFirstPromptSent = true;
-        this.editSession.sendPrompt(fullText, editMedia).catch((err) => {
+        this.editSession.sendPrompt(fullText, editMedias.length > 0 ? editMedias : undefined).catch((err) => {
           logger.error({ err }, "Edit session prompt failed");
         });
       } else {
-        this.editSession.sendContinue(fullText, editMedia).catch((err) => {
+        this.editSession.sendContinue(fullText, editMedias.length > 0 ? editMedias : undefined).catch((err) => {
           logger.error({ err }, "Edit session continue failed");
         });
       }
@@ -249,57 +270,63 @@ export class Agent {
       return this.handlePendingCredential(userPhone, connectorName, fullText);
     }
 
-    // Keep OAuth tokens fresh — needed for code sub-agent GPT fallback
-    await this.ensureOAuthTokens(userPhone);
+    // Show typing indicator while processing (classification + LLM call can take several seconds)
+    await this.connectorManager.setTyping(connectorName, userPhone, true);
+    try {
+      // Keep OAuth tokens fresh — needed for code sub-agent GPT fallback
+      await this.ensureOAuthTokens(userPhone);
 
-    // Collect all images for potential sub-agent forwarding
-    const allImageMedias: MediaAttachment[] = [];
-    if (routingMedia && routingMedia.mimeType.startsWith("image/")) allImageMedias.push(routingMedia);
-    if (imageMedias) {
-      for (const img of imageMedias) {
-        if (!allImageMedias.includes(img)) allImageMedias.push(img);
+      // Collect all images for potential sub-agent forwarding
+      const allImageMedias: MediaAttachment[] = [];
+      if (routingMedia && routingMedia.mimeType.startsWith("image/")) allImageMedias.push(routingMedia);
+      if (imageMedias) {
+        for (const img of imageMedias) {
+          if (!allImageMedias.includes(img)) allImageMedias.push(img);
+        }
       }
-    }
 
-    // If there are sessions with pending "done" polls, handle the 3 cases:
-    // 1. Encerrar (explicit close words)
-    // 2. Continuidade (adjust/fix on the same session)
-    // 3. Novo pedido (different topic → nag to close first)
-    if (this.sessionManager.hasDoneSessions()) {
-      return this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias);
-    }
+      // If there are sessions with pending "done" polls, handle the 3 cases:
+      // 1. Encerrar (explicit close words)
+      // 2. Continuidade (adjust/fix on the same session)
+      // 3. Novo pedido (different topic → nag to close first)
+      if (this.sessionManager.hasDoneSessions()) {
+        return this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias);
+      }
 
-    // If sessions are running but none done, tell user to wait
-    if (this.sessionManager.getRunningSessions().length > 0) {
-      return "O sub-agente ainda esta trabalhando... Aguarde um momento.";
-    }
+      // If sessions are running but none done, tell user to wait
+      if (this.sessionManager.getRunningSessions().length > 0) {
+        return "O sub-agente ainda esta trabalhando... Aguarde um momento.";
+      }
 
-    // Classify the task — does it need a sub-agent?
-    const classification = await classifyTask(fullText);
-    if (classification) {
-      return this.delegateToSubAgent(
-        userPhone,
-        connectorName,
-        fullText,
-        classification.credentialHints,
-        {},
-        audioUrl,
-        imageUrls,
-        allImageMedias
-      );
-    }
+      // Classify the task — does it need a sub-agent?
+      const classification = await classifyTask(fullText);
+      if (classification) {
+        return this.delegateToSubAgent(
+          userPhone,
+          connectorName,
+          fullText,
+          classification.credentialHints,
+          {},
+          audioUrl,
+          imageUrls,
+          allImageMedias
+        );
+      }
 
-    // Simple chat — Gemini Flash handles directly
-    // Combine all image media: routingMedia (first image or single image) + imageMedias (remaining)
-    let allMedia: MediaAttachment | MediaAttachment[] | undefined = routingMedia;
-    if (routingMedia && imageMedias && imageMedias.length > 0) {
-      // If we have routingMedia, it is ALWAYS imageMedias[0].
-      // imageMedias ALREADY contains all images. So we just use imageMedias directly.
-      allMedia = imageMedias;
-    } else if (!routingMedia && imageMedias && imageMedias.length > 0) {
-      allMedia = imageMedias.length === 1 ? imageMedias[0] : imageMedias;
+      // Simple chat — Gemini Flash handles directly
+      // Combine all image media: routingMedia (first image or single image) + imageMedias (remaining)
+      let allMedia: MediaAttachment | MediaAttachment[] | undefined = routingMedia;
+      if (routingMedia && imageMedias && imageMedias.length > 0) {
+        // If we have routingMedia, it is ALWAYS imageMedias[0].
+        // imageMedias ALREADY contains all images. So we just use imageMedias directly.
+        allMedia = imageMedias;
+      } else if (!routingMedia && imageMedias && imageMedias.length > 0) {
+        allMedia = imageMedias.length === 1 ? imageMedias[0] : imageMedias;
+      }
+      return this.handleSimpleChat(userPhone, user.name, fullText, allMedia, audioUrl, imageUrls);
+    } finally {
+      await this.connectorManager.setTyping(connectorName, userPhone, false);
     }
-    return this.handleSimpleChat(userPhone, user.name, fullText, allMedia, audioUrl, imageUrls);
   }
 
   /**
@@ -1239,6 +1266,37 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
       return result.content;
     };
 
+    // Persists assistant messages from Claude Code into session_messages table so they
+    // survive F5 reloads. Uses this.editSession?.id (set before sendPrompt/sendContinue).
+    // Note: must NOT go to the main conversations table — edit history is isolated.
+    const saveHistoryCb: SaveHistoryFn = async (text: string) => {
+      const sid = this.editSession?.id;
+      if (!sid) return;
+      try {
+        const { query: dbSave } = await import("./memory/db.js");
+        await dbSave(
+          `INSERT INTO session_messages (session_id, role, content) VALUES ($1, $2, $3)`,
+          [sid, "assistant", text]
+        );
+      } catch (err) {
+        logger.warn({ err }, "Failed to save edit session assistant message");
+      }
+    };
+
+    // Clean up agent state when the edit session closes (deploy success or /exit from within session)
+    const onCloseCb = () => {
+      // Delete persisted messages for this edit session from DB
+      const sid = this.editSession?.id;
+      if (sid) {
+        import("./memory/db.js").then(({ query: dbDel }) => {
+          dbDel(`DELETE FROM session_messages WHERE session_id = $1`, [sid]).catch(() => {});
+        }).catch(() => {});
+      }
+      this.editSession = null;
+      this.editFirstPromptSent = false;
+      this.editUserPhone = null;
+    };
+
     const session = new EditSession(
       this.connectorManager,
       connectorName,
@@ -1246,6 +1304,8 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
       authExpiredCb,
       getFreshTokenCb,
       gptFallbackCb,
+      saveHistoryCb,
+      onCloseCb,
     );
 
     // Build env for the container
@@ -1790,12 +1850,68 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         return this.sessionManager.getSessionHistory(sessionId);
       },
 
+      getEditHistory: async (): Promise<Array<{ role: string; content: string; created_at: string }>> => {
+        if (!this.editSession) return [];
+        try {
+          const { query: dbQuery } = await import("./memory/db.js");
+          const result = await dbQuery(
+            `SELECT role, content, created_at FROM session_messages WHERE session_id = $1 ORDER BY created_at ASC`,
+            [this.editSession.id]
+          );
+          return result.rows;
+        } catch (err) {
+          logger.warn({ err }, "Failed to load edit session history");
+          return [];
+        }
+      },
+
       sendTranscription: (audioUrl: string, transcription: string) => {
         webConnector.sendTranscription(audioUrl, transcription);
       },
 
       clearConversation: async (userPhone: string) => {
         await this.memory.clearConversation(userPhone);
+      },
+
+      createBlankSubAgentSession: async (connectorName: string, userId: string): Promise<string> => {
+        // Build env vars for the sub-agent container (same as delegateToSubAgent)
+        const env: Record<string, string> = {};
+
+        const claudeToken = await this.claudeOAuth.getValidToken(userId);
+        if (claudeToken) {
+          env.ANTHROPIC_ACCESS_TOKEN = claudeToken;
+        } else if (config.anthropic?.apiKey) {
+          env.ANTHROPIC_API_KEY = config.anthropic.apiKey;
+        }
+
+        const openaiToken = await this.openaiOAuth.getValidToken(userId);
+        if (openaiToken) {
+          env.OPENAI_ACCESS_TOKEN = openaiToken.accessToken;
+          if (openaiToken.accountId) env.OPENAI_ACCOUNT_ID = openaiToken.accountId;
+        } else if (config.openai?.apiKey) {
+          env.OPENAI_API_KEY = config.openai.apiKey;
+        }
+
+        if (config.gemini?.apiKey) env.GEMINI_API_KEY = config.gemini.apiKey;
+        if (config.databaseUrl) env.DATABASE_URL = config.databaseUrl;
+        if (config.vectorDatabaseUrl) env.PGVECTOR_URL = config.vectorDatabaseUrl;
+
+        let session;
+        try {
+          // Empty taskDescription → session starts in "waiting_user" state
+          session = await this.sessionManager.createSession("", connectorName, userId, {}, env);
+        } catch (err) {
+          logger.error({ err }, "Failed to create blank sub-agent session");
+          throw err;
+        }
+
+        const rickName = getSessionRickName(session.id);
+        const baseUrl = config.webBaseUrl || `https://rick.barroso.tec.br`;
+        const sessionUrl = `${baseUrl}/s/${session.id}`;
+
+        const ack = `Sessao *${rickName}* aberta e aguardando sua primeira tarefa:\n${sessionUrl}`;
+        await this.memory.saveMessage(userId, "assistant", ack);
+        return ack;
       },
     };
 

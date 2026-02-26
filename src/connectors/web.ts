@@ -55,10 +55,14 @@ export interface WebAgentBridge {
   getConversationHistory(userPhone: string, limit?: number): Promise<Array<{ role: string; content: string; audio_url?: string; image_urls?: string[] }>>;
   /** Get message history for a sub-agent session */
   getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string }>>;
+  /** Get message history for the active edit session */
+  getEditHistory(): Promise<Array<{ role: string; content: string; created_at: string }>>;
   /** Send audio transcription update to all web clients */
   sendTranscription(audioUrl: string, transcription: string): void;
   /** Clear conversation history for a user */
   clearConversation(userPhone: string): Promise<void>;
+  /** Create a blank sub-agent session (no initial task) and return the ack message */
+  createBlankSubAgentSession(connectorName: string, userId: string): Promise<string>;
 }
 
 export class WebConnector implements Connector {
@@ -176,6 +180,20 @@ export class WebConnector implements Connector {
                   whatsapp: this.whatsappConnector.isConnected(),
                 });
               }
+
+              // Restore edit mode state for reconnecting clients (e.g. after F5)
+              if (this.agentBridge?.isEditModeActive()) {
+                this.send(ws, { type: "edit_mode", active: true });
+                // Also restore edit session message history so F5 doesn't lose it
+                try {
+                  const editHistory = await this.agentBridge.getEditHistory();
+                  if (editHistory.length > 0) {
+                    this.send(ws, { type: "edit_history", messages: editHistory });
+                  }
+                } catch (_) {
+                  // Best-effort: if history load fails, UI is still functional
+                }
+              }
             } else {
               this.send(ws, { type: "auth_fail", reason: "Senha incorreta." });
               ws.close();
@@ -226,6 +244,9 @@ export class WebConnector implements Connector {
               break;
             case "oauth_disconnect":
               await this.handleOAuthDisconnect(ws, msg.provider);
+              break;
+            case "start_subagent":
+              await this.handleStartSubAgent(ws);
               break;
             default:
               logger.warn({ type: msg.type }, "Unknown WebSocket message type");
@@ -369,6 +390,9 @@ export class WebConnector implements Connector {
     if (options?.sessionId) {
       payload.sessionId = options.sessionId;
     }
+    if (options?.messageType) {
+      payload.messageType = options.messageType;
+    }
     this.broadcastToAuthenticated(payload);
   }
 
@@ -384,6 +408,8 @@ export class WebConnector implements Connector {
     const imageMedias: MediaAttachment[] = [];           // all image attachments
     let audioUrl: string | undefined;
     const imageUrls: string[] = [];
+
+    
 
     // Helper: generate random 16-char hex ID
     const genId = () => Array.from({ length: 8 }, () =>
@@ -607,6 +633,25 @@ export class WebConnector implements Connector {
     } catch (err) {
       logger.error({ err, sessionId }, "Failed to kill session");
       this.send(ws, { type: "error", text: "Erro ao encerrar sessao." });
+    }
+  }
+
+  private async handleStartSubAgent(ws: WebSocket): Promise<void> {
+    if (!this.agentBridge) {
+      this.send(ws, { type: "error", text: "Agent nao configurado." });
+      return;
+    }
+
+    try {
+      const ack = await this.agentBridge.createBlankSubAgentSession(this.name, config.ownerPhone);
+      // Broadcast ack as agent message in the main chat (all authenticated clients)
+      this.broadcastToAuthenticated({ type: "message", text: ack, from: "agent" });
+      // Broadcast updated sessions list so every open tab refreshes the sidebar
+      const sessions = this.agentBridge.getSessionsForUI();
+      this.broadcastToAuthenticated({ type: "sessions", sessions });
+    } catch (err) {
+      logger.error({ err }, "Failed to start blank sub-agent session");
+      this.send(ws, { type: "error", text: "Erro ao criar nova sessao de sub-agente." });
     }
   }
 

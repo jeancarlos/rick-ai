@@ -38,77 +38,53 @@ export type AuthExpiredCallback = () => Promise<boolean>;
 export type GetFreshTokenCallback = () => Promise<{ accessToken: string; refreshToken?: string } | null>;
 /** Called when Claude hits rate limit in edit mode. Should use GPT Codex to complete the task. */
 export type GptFallbackCallback = (prompt: string) => Promise<string>;
+/** Called to persist assistant messages in the conversation history with their type. */
+export type SaveHistoryFn = (text: string, type: "text" | "tool_use") => Promise<void>;
+/** Called when the edit session closes (deploy success or /exit) so the caller can clean up references. */
+export type OnCloseCallback = () => void;
 
 /** Internal callback type for sending messages (derived from ConnectorManager). */
-type SendFn = (text: string) => Promise<void>;
+type SendFn = (text: string, messageType?: "text" | "tool_use") => Promise<void>;
 /** Internal callback type for typing indicator (derived from ConnectorManager). */
 type TypingFn = (composing: boolean) => Promise<void>;
 
 type EditState = "starting" | "ready" | "running" | "deploying" | "auth_expired" | "closed";
 
 /**
- * Serialized message queue with debounce for streaming output.
- * 
- * Text is appended to a pending buffer. A debounce timer flushes the buffer
- * after DEBOUNCE_MS of inactivity. This ensures:
- * - Messages arrive in order (serial queue)
- * - Connector isn't flooded (debounce groups rapid events)
- * - No race conditions (all sends go through a single promise chain)
+ * Serialized message queue for streaming output.
+ *
+ * Each push() immediately enqueues a send — sem debounce, sem buffer de espera.
+ * A serialização via Promise chain garante que as mensagens chegam em ordem
+ * e sem race conditions (todos os envios passam por uma única cadeia de Promises).
+ * Textos maiores que maxChars são quebrados em chunks menores.
  */
 class StreamQueue {
-  private pending = "";
-  private timer: ReturnType<typeof setTimeout> | null = null;
   private sendChain: Promise<void> = Promise.resolve();
   private sendFn: SendFn;
-  private debounceMs: number;
   private maxChars: number;
-  constructor(sendFn: SendFn, debounceMs = 2000, maxChars = 3500) {
+
+  constructor(sendFn: SendFn, maxChars = 3500) {
     this.sendFn = sendFn;
-    this.debounceMs = debounceMs;
     this.maxChars = maxChars;
   }
 
-  /** Append text to the pending buffer. Flushes automatically via debounce or when buffer exceeds maxChars. */
-  push(text: string): void {
-    this.pending += text;
+  /** Envia o texto imediatamente (serializado via Promise chain). Divide em chunks se necessário. */
+  push(text: string, messageType?: "text" | "tool_use"): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
 
-    // If buffer is getting large, flush immediately to avoid huge messages
-    if (this.pending.length >= this.maxChars) {
-      this.flush();
-      return;
-    }
-
-    // Reset debounce timer
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.flush(), this.debounceMs);
-  }
-
-  /** Force flush whatever is in the pending buffer. */
-  flush(): void {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-
-    const text = this.pending.trim();
-    this.pending = "";
-
-    if (!text) return;
-
-    // Split into WhatsApp-sized chunks and enqueue each send
-    const chunks = this.splitChunks(text);
+    const chunks = this.splitChunks(trimmed);
     for (const chunk of chunks) {
       this.sendChain = this.sendChain
-        .then(() => this.sendFn(chunk))
+        .then(() => this.sendFn(chunk, messageType))
         .catch((err) => {
           logger.warn({ err }, "StreamQueue: failed to send chunk");
         });
     }
   }
 
-  /** Wait for all queued sends to complete. Call this on close. */
+  /** Aguarda todos os envios enfileirados completarem. Chame no fechamento. */
   async drain(): Promise<void> {
-    this.flush();
     await this.sendChain;
   }
 
@@ -166,9 +142,11 @@ export class EditSession {
   private onAuthExpired: AuthExpiredCallback | null;
   private getFreshToken: GetFreshTokenCallback | null;
   private gptFallback: GptFallbackCallback | null;
+  private saveHistory: SaveHistoryFn | null;
+  private onClose: OnCloseCallback | null;
   private typingInterval: ReturnType<typeof setInterval> | null = null;
   /** The last prompt that failed due to auth — retried only if no output was produced */
-  private lastFailedPrompt: { text: string; media?: MediaAttachment; isContinue: boolean; hadOutput: boolean } | null = null;
+  private lastFailedPrompt: { text: string; medias?: MediaAttachment[]; isContinue: boolean; hadOutput: boolean } | null = null;
 
   constructor(
     connectorManager: ConnectorManager,
@@ -177,6 +155,8 @@ export class EditSession {
     onAuthExpired?: AuthExpiredCallback,
     getFreshToken?: GetFreshTokenCallback,
     gptFallback?: GptFallbackCallback,
+    saveHistory?: SaveHistoryFn,
+    onClose?: OnCloseCallback,
   ) {
     this.id = randomBytes(8).toString("hex");
     this.containerName = `edit-session-${this.id}`;
@@ -185,8 +165,8 @@ export class EditSession {
     this.userId = userId;
 
     // Derive send/typing functions from ConnectorManager
-    this.sendMessage = async (text: string) => {
-      await connectorManager.sendMessage(connectorName, userId, text);
+    this.sendMessage = async (text: string, messageType?: "text" | "tool_use") => {
+      await connectorManager.sendMessage(connectorName, userId, text, { messageType });
     };
     this.setTyping = connectorManager.get(connectorName)?.capabilities.typing
       ? async (composing: boolean) => {
@@ -197,6 +177,8 @@ export class EditSession {
     this.onAuthExpired = onAuthExpired ?? null;
     this.getFreshToken = getFreshToken ?? null;
     this.gptFallback = gptFallback ?? null;
+    this.saveHistory = saveHistory ?? null;
+    this.onClose = onClose ?? null;
   }
 
   /**
@@ -238,13 +220,13 @@ export class EditSession {
           this.lastFailedPrompt = null;
         } else {
           // No output was produced — safe to auto-retry
-          const { text, media, isContinue } = this.lastFailedPrompt;
+          const { text, medias, isContinue } = this.lastFailedPrompt;
           this.lastFailedPrompt = null;
           await this.sendMessage("_Token renovado! Retomando o comando..._");
           if (isContinue) {
-            await this.sendContinue(text, media);
+            await this.sendContinue(text, medias);
           } else {
-            await this.sendPrompt(text, media);
+            await this.sendPrompt(text, medias);
           }
         }
       }
@@ -370,11 +352,11 @@ export class EditSession {
   /**
    * Run a Claude Code command and STREAM output to WhatsApp in real-time.
    *
-   * Uses StreamQueue to debounce and serialize sends:
-   * - NDJSON events are parsed as they arrive from stdout
-   * - Text and tool_use blocks are pushed to the StreamQueue immediately
-   * - StreamQueue flushes every 2s of inactivity or when buffer hits 3500 chars
-   * - On close, drain() waits for all pending sends to complete
+   * Uses StreamQueue para serializar envios sem debounce:
+   * - Eventos NDJSON são parseados conforme chegam do stdout
+   * - Cada bloco de texto ou tool_use é enviado imediatamente como mensagem separada
+   * - A serialização via Promise chain garante ordem e evita race conditions
+   * - On close, drain() aguarda todos os envios pendentes completarem
    *
    * @param args - Array of arguments to pass directly to docker exec (no shell).
    *               Uses -w /workspace to set working directory safely.
@@ -403,7 +385,7 @@ export class EditSession {
         ...args,
       ]);
 
-      const queue = new StreamQueue(this.sendMessage, 2000, 3500);
+      const queue = new StreamQueue(this.sendMessage, 3500);
       let ndjsonBuffer = "";
       let totalOutput = 0;
       let authFailed = false;
@@ -466,8 +448,9 @@ export class EditSession {
           if (evt.type === "assistant") {
             for (const block of evt.message?.content ?? []) {
               if (block.type === "text") {
-                queue.push(block.text);
+                queue.push(block.text, "text");
                 totalOutput += block.text.length;
+                this.saveHistory?.(block.text, "text").catch(() => {});
                 if (isRateLimitSignal(block.text)) {
                   rateLimited = true;
                 }
@@ -480,15 +463,16 @@ export class EditSession {
                 } else {
                   toolLine += "\n";
                 }
-                queue.push(toolLine);
+                queue.push(toolLine, "tool_use");
                 totalOutput += toolLine.length;
+                this.saveHistory?.(toolLine, "tool_use").catch(() => {});
               }
             }
           } else if (evt.type === "result") {
             // Final result event — extract text if present
             for (const block of evt.result ?? []) {
               if (block.type === "text" && block.text) {
-                queue.push(block.text);
+                queue.push(block.text, "text");
                 totalOutput += block.text.length;
               }
             }
@@ -504,8 +488,21 @@ export class EditSession {
             if (evt.type === "assistant") {
               for (const block of evt.message?.content ?? []) {
                 if (block.type === "text") {
-                  queue.push(block.text);
+                  queue.push(block.text, "text");
                   totalOutput += block.text.length;
+                  this.saveHistory?.(block.text, "text").catch(() => {});
+                } else if (block.type === "tool_use") {
+                  let toolLine = `\n\`[${block.name}]\` `;
+                  if (block.input?.command) {
+                    toolLine += `\`$ ${block.input.command}\`\n`;
+                  } else if (block.input?.filePath || block.input?.file_path) {
+                    toolLine += `\`${block.input.filePath || block.input.file_path}\`\n`;
+                  } else {
+                    toolLine += "\n";
+                  }
+                  queue.push(toolLine, "tool_use");
+                  totalOutput += toolLine.length;
+                  this.saveHistory?.(toolLine, "tool_use").catch(() => {});
                 }
               }
             }
@@ -603,9 +600,10 @@ export class EditSession {
 
   /**
    * Send a user message to Claude Code (first prompt).
-   * If media is provided (image), it's written to /tmp inside the container and passed via --image.
+   * If medias is provided (images), each is written to /tmp inside the container
+   * and the prompt is augmented to tell Claude Code to read all image files.
    */
-  async sendPrompt(prompt: string, media?: MediaAttachment): Promise<void> {
+  async sendPrompt(prompt: string, medias?: MediaAttachment[]): Promise<void> {
     if (this.state === "auth_expired") {
       await this.sendMessage("Aguardando re-autenticacao do Claude. Cole o codigo OAuth ou use */exit*.");
       return;
@@ -617,15 +615,14 @@ export class EditSession {
 
     this.state = "running";
     await this.ensureFreshToken();
-    this.lastFailedPrompt = { text: prompt, media, isContinue: false, hadOutput: false };
-    const imageArgs = await this.buildImageArgs(media);
+    this.lastFailedPrompt = { text: prompt, medias, isContinue: false, hadOutput: false };
+    const augmentedPrompt = await this.augmentPromptWithImages(prompt, medias);
     // Pass prompt as a direct argument — no shell escaping needed.
     // Node's spawn() passes each arg via execve(), so no shell metacharacters
     // are interpreted regardless of prompt content.
     await this.runClaude([
-      "claude", "-p", prompt,
+      "claude", "-p", augmentedPrompt,
       "--system-prompt", EDIT_SYSTEM_PROMPT,
-      ...imageArgs,
       "--output-format", "stream-json",
       "--dangerously-skip-permissions",
       "--verbose",
@@ -636,7 +633,7 @@ export class EditSession {
   /**
    * Continue a previous Claude Code conversation.
    */
-  async sendContinue(prompt: string, media?: MediaAttachment): Promise<void> {
+  async sendContinue(prompt: string, medias?: MediaAttachment[]): Promise<void> {
     if (this.state === "auth_expired") {
       await this.sendMessage("Aguardando re-autenticacao do Claude. Cole o codigo OAuth ou use */exit*.");
       return;
@@ -648,14 +645,13 @@ export class EditSession {
 
     this.state = "running";
     await this.ensureFreshToken();
-    this.lastFailedPrompt = { text: prompt, media, isContinue: true, hadOutput: false };
-    const imageArgs = await this.buildImageArgs(media);
+    this.lastFailedPrompt = { text: prompt, medias, isContinue: true, hadOutput: false };
+    const augmentedPrompt = await this.augmentPromptWithImages(prompt, medias);
     // Pass prompt as a direct argument — no shell escaping needed.
     await this.runClaude([
-      "claude", "-p", prompt,
+      "claude", "-p", augmentedPrompt,
       "--continue",
       "--system-prompt", EDIT_SYSTEM_PROMPT,
-      ...imageArgs,
       "--output-format", "stream-json",
       "--dangerously-skip-permissions",
       "--verbose",
@@ -664,32 +660,48 @@ export class EditSession {
   }
 
   /**
-   * Write a media attachment (image) into the running container and return the --image args.
-   * Returns empty array if no media or if the media isn't an image.
-   * Uses docker cp instead of sh -c to avoid shell injection via base64 content.
+   * Inject all images into the container and augment the prompt to reference each one.
+   * Claude Code CLI doesn't support --image, so we docker cp each file in
+   * and tell Claude to read them with its Read tool.
+   * Returns the original prompt if no images, or augmented prompt with all image paths.
    */
-  private async buildImageArgs(media?: MediaAttachment): Promise<string[]> {
-    if (!media || !this.containerId || !media.mimeType.startsWith("image/")) return [];
-
-    try {
-      const ext = media.mimeType.split("/")[1]?.replace("jpeg", "jpg") || "png";
-      const containerPath = `/tmp/edit-image-${Date.now()}.${ext}`;
-
-      // Write image to a host temp file, then docker cp into the container.
-      // This avoids piping base64 through sh -c.
-      const tmpFile = join(tmpdir(), `edit-image-${randomBytes(4).toString("hex")}.${ext}`);
-      await writeFile(tmpFile, media.data);
-      try {
-        await execFileAsync("docker", ["cp", tmpFile, `${this.containerName}:${containerPath}`]);
-      } finally {
-        await unlink(tmpFile).catch(() => {});
-      }
-
-      return ["--image", containerPath];
-    } catch (err) {
-      logger.warn({ err, sessionId: this.id }, "Failed to inject image into edit container");
-      return [];
+  private async augmentPromptWithImages(prompt: string, medias?: MediaAttachment[]): Promise<string> {
+    if (!medias || medias.length === 0 || !this.containerId) {
+      return prompt;
     }
+
+    const imagePaths: string[] = [];
+
+    for (const media of medias) {
+      if (!media.mimeType.startsWith("image/")) continue;
+
+      try {
+        const ext = media.mimeType.split("/")[1]?.replace("jpeg", "jpg") || "png";
+        const containerPath = `/tmp/edit-image-${Date.now()}-${randomBytes(2).toString("hex")}.${ext}`;
+
+        // Write image to a host temp file, then docker cp into the container.
+        const tmpFile = join(tmpdir(), `edit-image-${randomBytes(4).toString("hex")}.${ext}`);
+        await writeFile(tmpFile, media.data);
+        try {
+          await execFileAsync("docker", ["cp", tmpFile, `${this.containerName}:${containerPath}`]);
+        } finally {
+          await unlink(tmpFile).catch(() => {});
+        }
+
+        logger.info({ containerPath, size: media.data.length, mimeType: media.mimeType, sessionId: this.id }, "Image injected into edit container");
+        imagePaths.push(containerPath);
+      } catch (err) {
+        logger.warn({ err, sessionId: this.id }, "Failed to inject image into edit container");
+      }
+    }
+
+    if (imagePaths.length === 0) return prompt;
+
+    const imageInstructions = imagePaths
+      .map((p) => `[O usuario anexou uma imagem. Use o Read tool para ler o arquivo de imagem em: ${p}]`)
+      .join("\n");
+
+    return `${prompt}\n\n${imageInstructions}`;
   }
 
   /**
@@ -725,7 +737,12 @@ export class EditSession {
       output += text;
       const lines = text.split("\n").filter((l: string) => l.includes("[deploy]"));
       for (const line of lines) {
-        this.sendMessage(`\`${line.trim()}\``).catch(() => {});
+        // Extrai somente a mensagem útil, descartando o timestamp embutido do script
+        // Formato original: "[deploy] HH:MM:SS mensagem"
+        // Formato desejado: `[deploy]` mensagem  (igual ao padrão das outras tools)
+        const match = /\[deploy\]\s*[\d:]*\s*(.*)/.exec(line.trim());
+        const msg = match ? match[1].trim() : line.trim();
+        this.sendMessage(`\`[deploy]\` ${msg}`, "tool_use").catch(() => {});
       }
     });
 
@@ -793,6 +810,9 @@ export class EditSession {
 
     this.state = "closed";
     logger.info({ sessionId: this.id }, "Edit session closed");
+
+    // Notify caller (e.g. Agent) so it can clear its editSession reference
+    this.onClose?.();
   }
 
   /**
