@@ -148,6 +148,12 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS message_type VARCHAR(50) DEFAULT 'text'`,
     ],
   },
+  {
+    name: "006_session_messages_message_type",
+    statements: [
+      `ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS message_type VARCHAR(50) DEFAULT 'text'`,
+    ],
+  },
 ];
 
 export async function runMigrations(): Promise<void> {

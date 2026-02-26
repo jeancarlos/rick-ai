@@ -2520,7 +2520,9 @@ function handleServerMessage(msg) {
           var shMsg = msg.messages[sh];
           var shFrom = shMsg.role === 'agent' ? 'agent' : 'user';
           var shTime = shMsg.created_at ? new Date(shMsg.created_at) : new Date();
-          sessionMessages[msg.sessionId].push({ text: shMsg.content, from: shFrom, time: shTime });
+          var shEntry = { text: shMsg.content, from: shFrom, time: shTime };
+          if (shMsg.message_type) shEntry.messageType = shMsg.message_type;
+          sessionMessages[msg.sessionId].push(shEntry);
         }
         // Re-render if we're currently viewing this session
         if (currentSessionId === msg.sessionId) {
@@ -2810,7 +2812,9 @@ function loadEditHistory(messages) {
     var ehMsg = messages[j];
     var ehFrom = ehMsg.role === 'assistant' ? 'agent' : 'user';
     var ehTime = ehMsg.created_at ? new Date(ehMsg.created_at) : new Date();
-    sessionMessages['edit'].push({ text: ehMsg.content, from: ehFrom, time: ehTime });
+    var ehEntry = { text: ehMsg.content, from: ehFrom, time: ehTime };
+    if (ehMsg.message_type) ehEntry.messageType = ehMsg.message_type;
+    sessionMessages['edit'].push(ehEntry);
   }
   // Re-render if we're currently viewing the edit session
   if (currentSessionId === 'edit') {

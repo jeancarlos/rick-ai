@@ -313,10 +313,10 @@ export class SessionManager {
     return live.length;
   }
 
-  async getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string }>> {
+  async getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string }>> {
     try {
       const result = await query(
-        `SELECT role, content, created_at FROM session_messages WHERE session_id = $1 ORDER BY created_at ASC`,
+        `SELECT role, content, created_at, message_type FROM session_messages WHERE session_id = $1 ORDER BY created_at ASC`,
         [sessionId]
       );
       return result.rows;
@@ -507,11 +507,11 @@ export class SessionManager {
 
   // ==================== MESSAGE PERSISTENCE ====================
 
-  private async saveSessionMessage(sessionId: string, role: string, content: string): Promise<void> {
+  private async saveSessionMessage(sessionId: string, role: string, content: string, messageType: string = "text"): Promise<void> {
     try {
       await query(
-        `INSERT INTO session_messages (session_id, role, content) VALUES ($1, $2, $3)`,
-        [sessionId, role, content]
+        `INSERT INTO session_messages (session_id, role, content, message_type) VALUES ($1, $2, $3, $4)`,
+        [sessionId, role, content, messageType]
       );
     } catch (err) {
       logger.warn({ err, sessionId, role }, "Failed to save session message");

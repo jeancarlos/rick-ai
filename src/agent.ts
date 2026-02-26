@@ -214,8 +214,8 @@ export class Agent {
       try {
         const { query: dbSaveUser } = await import("./memory/db.js");
         await dbSaveUser(
-          `INSERT INTO session_messages (session_id, role, content) VALUES ($1, $2, $3)`,
-          [editSessionIdForSave, "user", fullText]
+          `INSERT INTO session_messages (session_id, role, content, message_type) VALUES ($1, $2, $3, $4)`,
+          [editSessionIdForSave, "user", fullText, "text"]
         );
       } catch (err) {
         logger.warn({ err }, "Failed to save edit session user message");
@@ -1269,14 +1269,14 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
     // Persists assistant messages from Claude Code into session_messages table so they
     // survive F5 reloads. Uses this.editSession?.id (set before sendPrompt/sendContinue).
     // Note: must NOT go to the main conversations table — edit history is isolated.
-    const saveHistoryCb: SaveHistoryFn = async (text: string) => {
+    const saveHistoryCb: SaveHistoryFn = async (text: string, type: "text" | "tool_use" = "text") => {
       const sid = this.editSession?.id;
       if (!sid) return;
       try {
         const { query: dbSave } = await import("./memory/db.js");
         await dbSave(
-          `INSERT INTO session_messages (session_id, role, content) VALUES ($1, $2, $3)`,
-          [sid, "assistant", text]
+          `INSERT INTO session_messages (session_id, role, content, message_type) VALUES ($1, $2, $3, $4)`,
+          [sid, "assistant", text, type]
         );
       } catch (err) {
         logger.warn({ err }, "Failed to save edit session assistant message");
@@ -1850,12 +1850,12 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         return this.sessionManager.getSessionHistory(sessionId);
       },
 
-      getEditHistory: async (): Promise<Array<{ role: string; content: string; created_at: string }>> => {
+      getEditHistory: async (): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string }>> => {
         if (!this.editSession) return [];
         try {
           const { query: dbQuery } = await import("./memory/db.js");
           const result = await dbQuery(
-            `SELECT role, content, created_at FROM session_messages WHERE session_id = $1 ORDER BY created_at ASC`,
+            `SELECT role, content, created_at, message_type FROM session_messages WHERE session_id = $1 ORDER BY created_at ASC`,
             [this.editSession.id]
           );
           return result.rows;
