@@ -1266,6 +1266,40 @@
     color: #fecaca;
   }
 
+  .version-refresh-btn {
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    background: rgba(148, 163, 184, 0.08);
+    color: #94a3b8;
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: all 0.16s ease;
+  }
+
+  .version-refresh-btn:hover {
+    border-color: rgba(250, 176, 5, 0.45);
+    background: rgba(250, 176, 5, 0.12);
+    color: #fab005;
+    transform: translateY(-1px);
+  }
+
+  .version-refresh-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .version-refresh-btn svg {
+    width: 12px;
+    height: 12px;
+    display: block;
+  }
+
   .settings-status {
     display: inline-flex;
     align-items: center;
@@ -1845,7 +1879,12 @@
           </div>
           <div style="display:flex;align-items:center;gap:6px;">
             <div id="version-badge" style="display:none;padding:3px 10px;border-radius:12px;font-size:0.72rem;font-weight:600;"></div>
-            <button id="version-refresh-btn" onclick="checkForUpdates()" title="Reverificar versao" style="display:none;border:1px solid var(--border);background:transparent;color:var(--text-secondary);width:24px;height:24px;border-radius:999px;cursor:pointer;font-size:0.85rem;line-height:1;">↻</button>
+            <button class="version-refresh-btn" id="version-refresh-btn" onclick="onVersionRefreshClick(event)" title="Reverificar versao" aria-label="Reverificar versao" style="display:none;position:relative;z-index:2;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+                <polyline points="21 3 21 9 15 9"/>
+              </svg>
+            </button>
           </div>
         </div>
 
@@ -3710,11 +3749,24 @@ function onVersionPrimaryClick() {
   checkForUpdates();
 }
 
+function onVersionRefreshClick(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  checkForUpdates();
+}
+
 function checkForUpdates() {
   var btn = document.getElementById('btn-check-updates');
   var refreshBtn = document.getElementById('version-refresh-btn');
   btn.disabled = true;
-  if (refreshBtn) refreshBtn.disabled = true;
+  if (refreshBtn) {
+    refreshBtn.disabled = true;
+    refreshBtn.style.opacity = '0.55';
+    refreshBtn.style.transform = 'rotate(180deg)';
+    refreshBtn.style.transition = 'transform 0.2s ease, opacity 0.2s ease';
+  }
   btn.textContent = 'Verificando...';
   codeOpStatus('');
 
@@ -3770,7 +3822,11 @@ function checkForUpdates() {
     })
     .finally(function() {
       btn.disabled = false;
-      if (refreshBtn) refreshBtn.disabled = false;
+      if (refreshBtn) {
+        refreshBtn.disabled = false;
+        refreshBtn.style.opacity = '1';
+        refreshBtn.style.transform = 'none';
+      }
       applyVersionPrimaryButtonState();
     });
 }
