@@ -482,12 +482,33 @@ async function writeLatestVersionCache(latest: LatestVersionInfo): Promise<void>
   }
 }
 
+/**
+ * Resolve current version from env vars (set at build time) or .rick-version file (fallback).
+ * The .rick-version file is written by the OTA updater and also COPYed into the image
+ * from the build context, so it works even when docker compose up --build is run
+ * without explicit --build-arg COMMIT_SHA=... (e.g. after /publish or manual rebuild).
+ */
+async function resolveCurrentVersion(): Promise<{ sha: string; date: string }> {
+  let sha = process.env.RICK_COMMIT_SHA || "unknown";
+  let date = process.env.RICK_COMMIT_DATE || "unknown";
+
+  if (sha === "unknown") {
+    try {
+      const content = await readFile(".rick-version", "utf-8");
+      const lines = content.trim().split("\n");
+      if (lines[0] && lines[0] !== "unknown") sha = lines[0].trim();
+      if (lines[1] && lines[1] !== "unknown") date = lines[1].trim();
+    } catch {
+      // .rick-version not found — stay "unknown"
+    }
+  }
+
+  return { sha, date };
+}
+
 async function handleVersionCheck(res: ServerResponse): Promise<void> {
   try {
-    const current = {
-      sha: process.env.RICK_COMMIT_SHA || "unknown",
-      date: process.env.RICK_COMMIT_DATE || "unknown",
-    };
+    const current = await resolveCurrentVersion();
 
     let latestSource: "github" | "cache" | "none" = "none";
     let latest = await fetchLatestFromGitHub();

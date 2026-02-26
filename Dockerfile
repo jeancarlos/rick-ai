@@ -40,6 +40,11 @@ ARG COMMIT_DATE=unknown
 ENV RICK_COMMIT_SHA=$COMMIT_SHA
 ENV RICK_COMMIT_DATE=$COMMIT_DATE
 
+# Copy .rick-version into the image as a fallback version source.
+# When RICK_COMMIT_SHA is "unknown" (e.g. docker compose up --build without
+# explicit build-args), health.ts reads this file instead.
+COPY .rick-version* ./
+
 EXPOSE 80
 
 CMD ["node", "dist/index.js"]
