@@ -195,6 +195,10 @@ export class Agent {
           this.webBridge.sendTranscription(audioUrl, transcription);
         }
       }
+      // Safety net: if connector sent images only in imageMedias, still forward one image to edit session.
+      if (!editMedia && imageMedias && imageMedias.length > 0) {
+        editMedia = imageMedias[0];
+      }
 
       // First message uses -p, subsequent use --continue
       if (!this.editFirstPromptSent) {
