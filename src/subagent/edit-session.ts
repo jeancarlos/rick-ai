@@ -1011,19 +1011,47 @@ git config user.name "Rick AI"
 git remote set-url origin "https://x-access-token:${githubToken}@github.com/${targetRepo}.git" 2>/dev/null \
   || git remote add origin "https://x-access-token:${githubToken}@github.com/${targetRepo}.git"
 
+# Fetch remote state first so we know about divergence
+echo "[publish] Sincronizando com o repositorio remoto..."
+git fetch origin main 2>&1 || echo "[publish] AVISO: fetch falhou (repo vazio?)"
+
+# If remote has commits we don't have, rebase first BEFORE committing
+# This avoids the divergence problem where our commit can't fast-forward.
+if git rev-parse origin/main >/dev/null 2>&1; then
+  LOCAL_BASE=$(git rev-parse HEAD 2>/dev/null || echo "none")
+  REMOTE_HEAD=$(git rev-parse origin/main 2>/dev/null || echo "none")
+  if [ "$LOCAL_BASE" != "$REMOTE_HEAD" ]; then
+    echo "[publish] Branch divergiu — fazendo rebase antes do commit..."
+    # Stash any unstaged changes from deploy.sh, rebase, then unstash
+    git stash --include-untracked 2>&1 || true
+    git rebase origin/main 2>&1 || {
+      echo "[publish] AVISO: rebase com conflito, abortando rebase e tentando merge..."
+      git rebase --abort 2>/dev/null || true
+      git merge origin/main --no-edit 2>&1 || true
+    }
+    git stash pop 2>&1 || true
+  fi
+fi
+
 # Stage all changes (deploy.sh already updated src/ in place)
 git add -A
-git commit -m "publish: atualizado via /publish do Rick AI" --allow-empty || echo "[publish] Nada a commitar"
 
-# Push strategy: fast-forward → rebase → force-with-lease
-if git push origin main 2>/dev/null; then
-  echo "[publish] Push fast-forward OK"
-elif git pull --rebase origin main 2>/dev/null && git push origin main 2>/dev/null; then
-  echo "[publish] Push com rebase OK"
-elif git push --force-with-lease origin main 2>/dev/null; then
+# Check if there's anything to commit
+if git diff --cached --quiet 2>/dev/null; then
+  echo "[publish] Nenhuma alteracao para commitar — codigo ja esta no GitHub"
+else
+  git commit -m "publish: atualizado via /publish do Rick AI" 2>&1
+  echo "[publish] Commit criado"
+fi
+
+# Push (should fast-forward now after rebase)
+echo "[publish] Enviando para o GitHub..."
+if git push origin main 2>&1; then
+  echo "[publish] Push OK"
+elif git push --force-with-lease origin main 2>&1; then
   echo "[publish] Push force-with-lease OK"
 else
-  echo "[publish] ERRO: push falhou com todas as estrategias"
+  echo "[publish] ERRO: push falhou"
   exit 1
 fi
 
