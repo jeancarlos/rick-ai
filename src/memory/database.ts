@@ -12,7 +12,7 @@ import { logger } from "../config/logger.js";
  * The active backend is determined at init time and cannot change without restart.
  *
  * SQLite compatibility:
- *   - $1, $2 placeholders are rewritten to ?1, ?2
+ *   - $1, $2 placeholders are rewritten to ? (anonymous positional)
  *   - SERIAL → INTEGER PRIMARY KEY AUTOINCREMENT
  *   - TIMESTAMPTZ → TEXT (ISO strings)
  *   - ILIKE → LIKE (SQLite is case-insensitive by default for ASCII)
@@ -270,21 +270,28 @@ function sqliteQuery(text: string, params?: any[]): QueryResult {
 function adaptSqlForSqlite(sql: string): string {
   let adapted = sql;
 
-  // Replace $N placeholders with ?N (for positional params), but ONLY outside
+  // Replace $N placeholders with ? (anonymous positional), but ONLY outside
   // single-quoted string literals.  The alternation matches a complete
   // single-quoted SQL string first (returned unchanged) so that occurrences of
   // $N inside literals such as DEFAULT '$1_prefix' or CHECK (col LIKE '$1%')
-  // are NOT converted into ?N parameter slots.  If they were converted, SQLite
-  // would see no unquoted '?' placeholders (sqlite3_bind_parameter_count → 0)
-  // while better-sqlite3 still counted the arguments, triggering:
-  //   RangeError: Too many parameter values were provided
+  // are NOT converted into ? parameter slots.  If they were converted, SQLite
+  // would see extra unquoted '?' placeholders (sqlite3_bind_parameter_count > 0)
+  // while better-sqlite3 has no argument to bind, triggering errors.
+  //
+  // We use anonymous '?' instead of numbered '?N' because better-sqlite3
+  // expects numbered placeholders to be bound by object ({1: val, 2: val}),
+  // whereas all callers pass parameters via positional spread (...params).
+  // Anonymous '?' works correctly with positional spread binding.
+  //
+  // This is safe as long as $1, $2, ... appear in sequential order in every
+  // SQL statement — which is the case throughout this codebase.
   //
   // SQL standard single-quote escaping: '' (two consecutive single-quotes)
   // represents a literal single-quote inside a string — handled by |'' in the
   // character class so the regex does not exit the literal prematurely.
   adapted = adapted.replace(/'(?:[^']|'')*'|\$(\d+)/g, (match, pN) => {
     // pN is defined only when the \$(\d+) branch matched (outside a string).
-    return pN !== undefined ? `?${pN}` : match;
+    return pN !== undefined ? "?" : match;
   });
 
   // SERIAL → INTEGER PRIMARY KEY AUTOINCREMENT
@@ -365,8 +372,8 @@ function adaptSqlForSqlite(sql: string): string {
     return "SELECT 0 as size_bytes";
   }
 
-  // $N::vector → ?N (remove type cast)
-  adapted = adapted.replace(/\?(\d+)::vector/gi, "?$1");
+  // ?::vector → ? (remove PostgreSQL type cast — already converted from $N above)
+  adapted = adapted.replace(/\?\d*::vector/gi, "?");
 
   // ANY($N) → needs special handling in SQLite (not supported natively)
   // We'll handle this in callers that use it
