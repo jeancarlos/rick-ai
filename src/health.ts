@@ -612,10 +612,9 @@ async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<
     deployLog.push("[update] Files copied");
 
     // Respond immediately BEFORE rebuilding.
-    // The rebuild (`docker compose up -d --build`) restarts this container,
-    // so we can never send a response after — the connection dies.
+    // The rebuild restarts this container, so we can never send a response after.
     // The client handles the disconnection and polls /health to confirm.
-    deployLog.push("[update] Starting build...");
+    deployLog.push("[update] Starting build via external deployer...");
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
       success: true,
@@ -626,42 +625,93 @@ async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<
       message: "Arquivos copiados. Build iniciando — Rick vai reiniciar em breve.",
     }));
 
-    // Fire-and-forget: rebuild in the background.
-    // This will restart the container, killing this process.
-    // If build fails, rollback restores the backup.
-    setImmediate(async () => {
-      try {
-        logger.info("Update: starting docker compose build (will restart container)...");
-        await execAsyncOutput("docker", [
-          "run", "--rm",
-          "-v", "/var/run/docker.sock:/var/run/docker.sock",
-          "-v", `${projectDir}:${projectDir}`,
-          "-w", projectDir,
-          "-e", `RICK_COMMIT_SHA=${commitSha}`,
-          "-e", `RICK_COMMIT_DATE=${commitDate}`,
-          "docker:cli",
-          "docker", "compose", "up", "-d", "--build",
-        ], undefined, 300000);
+    // Launch build+restart in a DETACHED docker:cli container.
+    // This container survives Rick's own restart (it runs independently on the host Docker).
+    // The script: build → smoke test → swap → watchdog → rollback on failure.
+    // Same safety guarantees as deploy.sh but triggered from OTA update.
+    setImmediate(() => {
+      const deployScript = [
+        `set -e`,
+        `echo "[ota-deploy] Building candidate image..."`,
+        `cd ${projectDir}`,
+        `docker build --build-arg COMMIT_SHA=${commitSha} --build-arg COMMIT_DATE=${commitDate} -t rick-ai-agent:candidate -f Dockerfile . || {`,
+        `  echo "[ota-deploy] Build FAILED — rolling back src/"`,
+        `  rm -rf ${projectDir}/src && cp -r ${projectDir}/src.bak ${projectDir}/src`,
+        `  rm -rf ${projectDir}/src.bak ${hostStaging}`,
+        `  exit 1`,
+        `}`,
+        ``,
+        `echo "[ota-deploy] Smoke testing candidate (HEALTH_ONLY)..."`,
+        `docker rm -f rick-ota-candidate 2>/dev/null || true`,
+        `docker run -d --name rick-ota-candidate --env-file ${projectDir}/.env -e HEALTH_ONLY=true -p 8081:80 rick-ai-agent:candidate`,
+        `HEALTHY=false`,
+        `for i in $(seq 1 20); do`,
+        `  sleep 3`,
+        `  RESP=$(wget -qO- http://localhost:8081/health 2>/dev/null || echo "")`,
+        `  if echo "$RESP" | grep -q '"status":"ok"'; then`,
+        `    HEALTHY=true`,
+        `    echo "[ota-deploy] Candidate healthy after attempt $i"`,
+        `    break`,
+        `  fi`,
+        `  echo "[ota-deploy] Health check $i/20: $RESP"`,
+        `done`,
+        `docker rm -f rick-ota-candidate 2>/dev/null || true`,
+        ``,
+        `if [ "$HEALTHY" != "true" ]; then`,
+        `  echo "[ota-deploy] Smoke test FAILED — rolling back"`,
+        `  rm -rf ${projectDir}/src && cp -r ${projectDir}/src.bak ${projectDir}/src`,
+        `  rm -rf ${projectDir}/src.bak ${hostStaging}`,
+        `  docker rmi rick-ai-agent:candidate 2>/dev/null || true`,
+        `  exit 2`,
+        `fi`,
+        ``,
+        `echo "[ota-deploy] Swapping: promoting candidate..."`,
+        `docker tag rick-ai-agent:candidate rick-ai-agent:latest`,
+        `docker compose -f ${projectDir}/docker-compose.yml up -d`,
+        `docker rmi rick-ai-agent:candidate 2>/dev/null || true`,
+        ``,
+        `echo "[ota-deploy] Watchdog: monitoring for 60s..."`,
+        `WATCH_OK=true`,
+        `for i in $(seq 1 12); do`,
+        `  sleep 5`,
+        `  RESP=$(wget -qO- http://localhost:80/health 2>/dev/null || echo "")`,
+        `  if echo "$RESP" | grep -q '"status":"ok"'; then`,
+        `    echo "[ota-deploy] Watchdog $i/12: healthy"`,
+        `  else`,
+        `    echo "[ota-deploy] Watchdog $i/12 FAILED: $RESP"`,
+        `    WATCH_OK=false`,
+        `    break`,
+        `  fi`,
+        `done`,
+        ``,
+        `if [ "$WATCH_OK" != "true" ]; then`,
+        `  echo "[ota-deploy] Watchdog FAILED — rolling back!"`,
+        `  rm -rf ${projectDir}/src && cp -r ${projectDir}/src.bak ${projectDir}/src`,
+        `  rm -rf ${projectDir}/src.bak`,
+        `  docker compose -f ${projectDir}/docker-compose.yml up -d --build`,
+        `  rm -rf ${hostStaging}`,
+        `  exit 3`,
+        `fi`,
+        ``,
+        `echo "[ota-deploy] Success! Cleaning up..."`,
+        `rm -rf ${projectDir}/src.bak ${hostStaging}`,
+        `echo "[ota-deploy] Done."`,
+      ].join("\n");
 
-        // If we somehow survive (shouldn't happen), clean up
-        await cleanupHostDir(hostStaging).catch(() => {});
-        await cleanupHostDir(`${projectDir}/src.bak`).catch(() => {});
-      } catch (buildErr) {
-        logger.error({ err: buildErr }, "Update build FAILED — rolling back");
-        try {
-          await execAsyncOutput("docker", [
-            "run", "--rm",
-            "-v", `${projectDir}:${projectDir}`,
-            "alpine:latest",
-            "sh", "-c",
-            `rm -rf ${projectDir}/src && cp -r ${projectDir}/src.bak ${projectDir}/src && rm -rf ${projectDir}/src.bak`,
-          ]);
-          logger.info("Update: rollback complete");
-        } catch (rbErr) {
-          logger.error({ err: rbErr }, "Update: rollback FAILED");
-        }
-        await cleanupHostDir(hostStaging).catch(() => {});
-      }
+      const proc = spawn("docker", [
+        "run", "-d", "--rm",
+        "--name", "rick-ota-deployer",
+        "-v", "/var/run/docker.sock:/var/run/docker.sock",
+        "-v", `${projectDir}:${projectDir}`,
+        "-v", "/tmp:/tmp",
+        "--network", "host",
+        "-w", projectDir,
+        "docker:cli",
+        "sh", "-c", deployScript,
+      ], { stdio: "ignore", detached: true });
+
+      proc.unref();
+      logger.info("Update: OTA deployer container launched (detached)");
     });
   } catch (err) {
     logger.error({ err }, "Update failed");
