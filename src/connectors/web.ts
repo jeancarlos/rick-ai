@@ -503,7 +503,6 @@ export class WebConnector implements Connector {
     const incoming: AgentIncomingMessage = {
       connectorName: this.name,
       userId: config.ownerPhone,
-      userName: "Ruan",
       text: promptText,
       media,
       imageMedias: imageMedias.length > 0 ? imageMedias : undefined,

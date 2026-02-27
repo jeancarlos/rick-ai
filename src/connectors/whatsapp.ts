@@ -285,10 +285,10 @@ export class WhatsAppConnector implements Connector {
 
       // Track message
       const trackText = text || (audioInfo ? "[audio]" : "[imagem]");
-      await this.memory.trackMessage(msgId, "RUAN", trackText);
+      await this.memory.trackMessage(msgId, "USER", trackText);
 
       const userPhone = this.getMyPhone();
-      const pushName = msg.pushName || "Ruan";
+      const pushName = msg.pushName || undefined;
 
       // Extract quoted message text (if user replied to a message)
       const quotedText = this.extractQuotedText(msg);
@@ -303,7 +303,7 @@ export class WhatsAppConnector implements Connector {
             mimeType: audioInfo.mimeType,
           };
           logger.info(
-            { from: "RUAN", type: "audio", seconds: audioInfo.seconds, ptt: audioInfo.ptt },
+            { from: "USER", type: "audio", seconds: audioInfo.seconds, ptt: audioInfo.ptt },
             "Audio message received"
           );
         } catch (err) {
@@ -320,7 +320,7 @@ export class WhatsAppConnector implements Connector {
             mimeType: imageInfo.mimeType,
           };
           logger.info(
-            { from: "RUAN", type: "image", mimeType: imageInfo.mimeType, hasCaption: !!text },
+            { from: "USER", type: "image", mimeType: imageInfo.mimeType, hasCaption: !!text },
             "Image message received"
           );
         } catch (err) {
@@ -332,7 +332,7 @@ export class WhatsAppConnector implements Connector {
       } else {
         logger.info(
           {
-            from: "RUAN",
+            from: "USER",
             text: (text || "").substring(0, 100),
             ...(quotedText ? { quotedText: quotedText.substring(0, 80) } : {}),
           },
@@ -375,7 +375,7 @@ export class WhatsAppConnector implements Connector {
       }
 
       logger.info(
-        { to: "RUAN", responseLength: response.length },
+        { to: "USER", responseLength: response.length },
         "Response sent"
       );
     } catch (err) {

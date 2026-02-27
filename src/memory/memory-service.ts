@@ -339,7 +339,7 @@ export class MemoryService {
 
   async trackMessage(
     waMessageId: string,
-    author: "AGENT" | "RUAN",
+    author: "AGENT" | "USER",
     content: string
   ): Promise<void> {
     await query(
