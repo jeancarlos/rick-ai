@@ -404,13 +404,13 @@ export class ClaudeOAuthService {
       `INSERT INTO oauth_tokens (user_phone, provider, access_token, refresh_token, expires_at, scopes, account_email, org_name, updated_at)
        VALUES ($1, 'claude', $2, $3, $4, $5, $6, $7, NOW())
        ON CONFLICT (user_phone, provider)
-       DO UPDATE SET 
-         access_token = $2, 
-         refresh_token = $3, 
-         expires_at = $4, 
-         scopes = $5, 
-         account_email = COALESCE($6, oauth_tokens.account_email),
-         org_name = COALESCE($7, oauth_tokens.org_name),
+       DO UPDATE SET
+         access_token = excluded.access_token,
+         refresh_token = excluded.refresh_token,
+         expires_at = excluded.expires_at,
+         scopes = excluded.scopes,
+         account_email = COALESCE(excluded.account_email, oauth_tokens.account_email),
+         org_name = COALESCE(excluded.org_name, oauth_tokens.org_name),
          is_active = TRUE,
          updated_at = NOW()`,
       [
