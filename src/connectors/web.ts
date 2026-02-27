@@ -454,8 +454,8 @@ export class WebConnector implements Connector {
       }
     }
 
-    // Process images — supports both `files` array (new) and single `image` field (legacy)
-    const files: Array<{ base64: string; mimeType: string }> = [];
+    // Process files — supports both `files` array (new) and single `image` field (legacy)
+    const files: Array<{ base64: string; mimeType: string; name?: string }> = [];
     if (msg.files && Array.isArray(msg.files)) {
       for (const f of msg.files) {
         if (f.base64 && f.mimeType) files.push(f);
@@ -466,18 +466,51 @@ export class WebConnector implements Connector {
       if (mime) files.push({ base64: msg.image, mimeType: mime });
     }
 
+    // Conteúdo textual extraído de arquivos de texto (txt, csv, json, etc.)
+    const fileTexts: string[] = [];
+
     for (const f of files) {
       const buffer = Buffer.from(f.base64, "base64");
-      const attachment: MediaAttachment = { data: buffer, mimeType: f.mimeType };
-      imageMedias.push(attachment);
-      logger.info({ type: "image", size: buffer.length, mimeType: f.mimeType }, "Web image received");
-      try {
-        const id = genId();
-        await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
-        imageUrls.push(`/img/${id}`);
-        logger.info({ imageUrl: `/img/${id}` }, "Image blob saved");
-      } catch (err) {
-        logger.error({ err }, "Failed to save image blob");
+
+      if (f.mimeType.startsWith("image/")) {
+        // Imagens: tratamento existente
+        const attachment: MediaAttachment = { data: buffer, mimeType: f.mimeType };
+        imageMedias.push(attachment);
+        logger.info({ type: "image", size: buffer.length, mimeType: f.mimeType }, "Web image received");
+        try {
+          const id = genId();
+          await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
+          imageUrls.push(`/img/${id}`);
+          logger.info({ imageUrl: `/img/${id}` }, "Image blob saved");
+        } catch (err) {
+          logger.error({ err }, "Failed to save image blob");
+        }
+      } else if (
+        f.mimeType.startsWith("text/") ||
+        f.mimeType === "application/json" ||
+        f.mimeType === "application/xml" ||
+        f.mimeType === "application/javascript"
+      ) {
+        // Arquivos de texto: decodificar conteúdo e incluir no prompt
+        const content = buffer.toString("utf-8");
+        const fileName = f.name || "arquivo";
+        fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
+        logger.info({ type: "text-file", size: buffer.length, mimeType: f.mimeType, name: fileName }, "Web text file received");
+      } else if (f.mimeType === "application/pdf") {
+        // PDFs: passar como media (Claude suporta PDFs como documentos)
+        const attachment: MediaAttachment = { data: buffer, mimeType: f.mimeType };
+        imageMedias.push(attachment);
+        logger.info({ type: "pdf", size: buffer.length, name: f.name }, "Web PDF received");
+        try {
+          const id = genId();
+          await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
+          imageUrls.push(`/img/${id}`);
+        } catch (err) {
+          logger.error({ err }, "Failed to save PDF blob");
+        }
+      } else {
+        // Outros tipos binários: tentar como media e registrar aviso
+        logger.warn({ mimeType: f.mimeType, name: f.name }, "Unsupported file type received, skipping");
       }
     }
 
@@ -500,6 +533,11 @@ export class WebConnector implements Connector {
         : "O usuario enviou uma imagem. Analise a imagem e descreva o que voce ve.");
     } else {
       promptText = text;
+    }
+
+    // Acrescentar conteúdo de arquivos de texto ao prompt
+    if (fileTexts.length > 0) {
+      promptText = (promptText || "") + fileTexts.join("");
     }
 
     if (!promptText && !media) return;
