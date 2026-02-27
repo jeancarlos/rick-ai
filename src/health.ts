@@ -644,13 +644,15 @@ async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<
     deployLog.push(`[update] Version: ${commitSha} (${commitDate})`);
     deployLog.push(`[update] Version source: ${versionSource}`);
 
-    // Backup + copy
+    // Backup all project files before overwriting
+    await backupProjectFiles(projectDir);
+    deployLog.push("[update] Backup criado");
+
+    // Copy new files from extracted archive
     const copyScript = [
       `set -e`,
-      `rm -rf ${projectDir}/src.bak`,
-      `cp -r ${projectDir}/src ${projectDir}/src.bak`,
       `cd ${hostSourceRoot}`,
-      `for d in src docker scripts; do`,
+      `for d in src docker scripts .github; do`,
       `  if [ -d "$d" ]; then rm -rf ${projectDir}/$d && cp -r $d ${projectDir}/$d; fi`,
       `done`,
       `for f in Dockerfile docker-compose.yml package.json package-lock.json tsconfig.json .gitignore .env.example AGENTS.md CLAUDE.md GEMINI.md README.md LICENSE deploy-db.sh setup-oracle.sh .rick-version; do`,
@@ -687,14 +689,16 @@ async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<
     // The script: build → smoke test → swap → watchdog → rollback on failure.
     // Same safety guarantees as deploy.sh but triggered from OTA update.
     setImmediate(() => {
+      const rollbackShell = generateRollbackShell(projectDir);
+      const backupDir = `${projectDir}/.deploy-backup`;
       const deployScript = [
         `set -e`,
         `echo "[ota-deploy] Building candidate image..."`,
         `cd ${projectDir}`,
         `docker build --build-arg COMMIT_SHA=${commitSha} --build-arg COMMIT_DATE=${commitDate} -t rick-ai-agent:candidate -f Dockerfile . || {`,
-        `  echo "[ota-deploy] Build FAILED — rolling back src/"`,
-        `  rm -rf ${projectDir}/src && cp -r ${projectDir}/src.bak ${projectDir}/src`,
-        `  rm -rf ${projectDir}/src.bak ${hostStaging}`,
+        `  echo "[ota-deploy] Build FAILED — rolling back"`,
+        rollbackShell,
+        `  rm -rf ${hostStaging}`,
         `  exit 1`,
         `}`,
         ``,
@@ -716,8 +720,8 @@ async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<
         ``,
         `if [ "$HEALTHY" != "true" ]; then`,
         `  echo "[ota-deploy] Smoke test FAILED — rolling back"`,
-        `  rm -rf ${projectDir}/src && cp -r ${projectDir}/src.bak ${projectDir}/src`,
-        `  rm -rf ${projectDir}/src.bak ${hostStaging}`,
+        rollbackShell,
+        `  rm -rf ${hostStaging}`,
         `  docker rmi rick-ai-agent:candidate 2>/dev/null || true`,
         `  exit 2`,
         `fi`,
@@ -743,15 +747,14 @@ async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<
         ``,
         `if [ "$WATCH_OK" != "true" ]; then`,
         `  echo "[ota-deploy] Watchdog FAILED — rolling back!"`,
-        `  rm -rf ${projectDir}/src && cp -r ${projectDir}/src.bak ${projectDir}/src`,
-        `  rm -rf ${projectDir}/src.bak`,
+        rollbackShell,
         `  docker compose -f ${projectDir}/docker-compose.yml up -d --build`,
         `  rm -rf ${hostStaging}`,
         `  exit 3`,
         `fi`,
         ``,
         `echo "[ota-deploy] Success! Cleaning up..."`,
-        `rm -rf ${projectDir}/src.bak ${hostStaging}`,
+        `rm -rf ${backupDir} ${hostStaging}`,
         `echo "[ota-deploy] Done."`,
       ].join("\n");
 
@@ -1000,16 +1003,16 @@ async function handleCodeImport(req: IncomingMessage, res: ServerResponse): Prom
     const hostSourceRoot = sourceSubdir === "." ? hostExtractDir : `${hostExtractDir}/${sourceSubdir}`;
     deployLog.push(`[import] Source root: ${hostSourceRoot}`);
 
-    // Step 3: Backup current src/ on host and copy new files
+    // Step 3: Backup all project files on host and copy new files
+    await backupProjectFiles(projectDir);
+    deployLog.push("[import] Backup criado");
+
     const copyScript = [
       `set -e`,
-      `echo "[import] Backing up src/"`,
-      `rm -rf ${projectDir}/src.bak`,
-      `cp -r ${projectDir}/src ${projectDir}/src.bak`,
       `echo "[import] Copying files..."`,
       `cd ${hostSourceRoot}`,
       // Copy directories
-      `for d in src docker scripts; do`,
+      `for d in src docker scripts .github; do`,
       `  if [ -d "$d" ]; then`,
       `    rm -rf ${projectDir}/$d`,
       `    cp -r $d ${projectDir}/$d`,
@@ -1075,7 +1078,7 @@ async function handleCodeImport(req: IncomingMessage, res: ServerResponse): Prom
 
       // Clean up staging and backup on host
       await cleanupHostDir(hostStaging);
-      await cleanupHostDir(`${projectDir}/src.bak`);
+      await cleanupHostDir(`${projectDir}/.deploy-backup`);
 
       // Send response before this container gets replaced
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -1086,13 +1089,7 @@ async function handleCodeImport(req: IncomingMessage, res: ServerResponse): Prom
       deployLog.push("[import] Rolling back...");
 
       try {
-        await execAsyncOutput("docker", [
-          "run", "--rm",
-          "-v", `${projectDir}:${projectDir}`,
-          "alpine:latest",
-          "sh", "-c",
-          `rm -rf ${projectDir}/src && cp -r ${projectDir}/src.bak ${projectDir}/src && rm -rf ${projectDir}/src.bak`,
-        ]);
+        await rollbackProjectFiles(projectDir);
         deployLog.push("[import] Rollback complete");
       } catch (rbErr) {
         deployLog.push("[import] Rollback FAILED: " + (rbErr as Error).message);
@@ -1138,6 +1135,91 @@ async function pipeToDockerFile(data: Buffer, hostPath: string): Promise<void> {
 }
 
 /** Clean up a directory on the HOST filesystem */
+/**
+ * Directories and files to backup/rollback in import, update, and deploy flows.
+ * Keep in sync with EXPORT_INCLUDES and deploy.sh's do_rollback().
+ */
+const BACKUP_DIRS = ["src", "scripts", "docker", ".github"];
+const BACKUP_FILES = [
+  "Dockerfile", "docker-compose.yml", "package.json", "package-lock.json",
+  "tsconfig.json", ".gitignore", ".env.example",
+  "AGENTS.md", "CLAUDE.md", "GEMINI.md", "README.md", "LICENSE",
+  "deploy-db.sh", "setup-oracle.sh", ".rick-version",
+];
+
+/**
+ * Backup all project files to a .deploy-backup dir on the host.
+ * Runs via docker container with host filesystem mounted.
+ */
+async function backupProjectFiles(projectDir: string): Promise<string> {
+  const backupDir = `${projectDir}/.deploy-backup`;
+  const script = [
+    `set -e`,
+    `rm -rf ${backupDir}`,
+    `mkdir -p ${backupDir}`,
+    // Backup directories
+    ...BACKUP_DIRS.map(d =>
+      `[ -d "${projectDir}/${d}" ] && cp -r "${projectDir}/${d}" "${backupDir}/${d}" || true`
+    ),
+    // Backup files
+    ...BACKUP_FILES.map(f =>
+      `[ -f "${projectDir}/${f}" ] && cp "${projectDir}/${f}" "${backupDir}/${f}" || true`
+    ),
+  ].join("\n");
+
+  await execAsyncOutput("docker", [
+    "run", "--rm",
+    "-v", `${projectDir}:${projectDir}`,
+    "alpine:latest",
+    "sh", "-c", script,
+  ]);
+  return backupDir;
+}
+
+/**
+ * Rollback project files from .deploy-backup dir on the host.
+ * Restores all directories and files, then cleans up the backup.
+ */
+async function rollbackProjectFiles(projectDir: string): Promise<void> {
+  const backupDir = `${projectDir}/.deploy-backup`;
+  const script = [
+    `set -e`,
+    // Restore directories
+    ...BACKUP_DIRS.map(d =>
+      `[ -d "${backupDir}/${d}" ] && rm -rf "${projectDir}/${d}" && cp -r "${backupDir}/${d}" "${projectDir}/${d}" || true`
+    ),
+    // Restore files
+    ...BACKUP_FILES.map(f =>
+      `[ -f "${backupDir}/${f}" ] && cp "${backupDir}/${f}" "${projectDir}/${f}" || true`
+    ),
+    `rm -rf ${backupDir}`,
+  ].join("\n");
+
+  await execAsyncOutput("docker", [
+    "run", "--rm",
+    "-v", `${projectDir}:${projectDir}`,
+    "alpine:latest",
+    "sh", "-c", script,
+  ]);
+}
+
+/**
+ * Generate a shell script snippet that performs a full project rollback.
+ * Used in inline deploy scripts (OTA deployer) that run inside docker:cli containers.
+ */
+function generateRollbackShell(projectDir: string): string {
+  const backupDir = `${projectDir}/.deploy-backup`;
+  const lines: string[] = [];
+  for (const d of BACKUP_DIRS) {
+    lines.push(`[ -d "${backupDir}/${d}" ] && rm -rf "${projectDir}/${d}" && cp -r "${backupDir}/${d}" "${projectDir}/${d}" || true`);
+  }
+  for (const f of BACKUP_FILES) {
+    lines.push(`[ -f "${backupDir}/${f}" ] && cp "${backupDir}/${f}" "${projectDir}/${f}" || true`);
+  }
+  lines.push(`rm -rf "${backupDir}"`);
+  return lines.join("\n");
+}
+
 async function cleanupHostDir(hostPath: string): Promise<void> {
   await execAsyncOutput("docker", [
     "run", "--rm",
