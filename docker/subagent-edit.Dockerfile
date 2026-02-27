@@ -12,7 +12,9 @@ RUN npm install -g @anthropic-ai/claude-code
 RUN npx playwright install chromium --with-deps 2>/dev/null || true
 
 # Create non-root user matching host UID 1001
-RUN useradd -m -u 1001 -s /bin/bash claude
+RUN useradd -m -u 1001 -s /bin/bash claude \
+    && mkdir -p /home/claude/.claude \
+    && chown -R claude:claude /home/claude/.claude
 
 # Copy multi-provider edit agent script
 COPY docker/edit-agent.mjs /app/edit-agent.mjs
