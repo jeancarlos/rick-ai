@@ -165,6 +165,15 @@ export class WebConnector implements Connector {
 
       logger.info({ totalClients: this.clients.size }, "Web client connected");
 
+      // ── Keepalive: ping every 25s, kill if no pong within 10s ──
+      let isAlive = true;
+      ws.on("pong", () => { isAlive = true; });
+      const pingInterval = setInterval(() => {
+        if (!isAlive) { ws.terminate(); return; }
+        isAlive = false;
+        ws.ping();
+      }, 25_000);
+
       const authTimeout = setTimeout(() => {
         if (!client.authenticated) {
           this.send(ws, { type: "auth_fail", reason: "Timeout — autenticacao nao recebida." });
@@ -279,12 +288,14 @@ export class WebConnector implements Connector {
       });
 
       ws.on("close", () => {
+        clearInterval(pingInterval);
         clearTimeout(authTimeout);
         this.clients.delete(ws);
         logger.info({ totalClients: this.clients.size }, "Web client disconnected");
       });
 
       ws.on("error", (err) => {
+        clearInterval(pingInterval);
         logger.warn({ err }, "Web client WebSocket error");
         this.clients.delete(ws);
       });

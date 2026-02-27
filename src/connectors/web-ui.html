@@ -2543,10 +2543,8 @@ function connectWebSocket() {
   ws.onclose = function() {
     if (authenticated) {
       // Reset the typing indicator immediately when the connection drops.
-      // This prevents the "still processing" stuck state when the phone is unlocked
-      // after locking mid-session: the server sends typing:false on reconnect, but
-      // resetting here avoids any visible flicker before that message arrives.
       showTyping(false);
+      updateStatus('Offline');
       updateConnectionBar('disconnected');
       scheduleReconnect();
     }
@@ -2658,11 +2656,8 @@ function handleServerMessage(msg) {
 
     case 'status':
       whatsappConnected = !!msg.whatsapp;
-      if (msg.whatsapp) {
-        updateStatus('Online');
-      } else {
-        updateStatus('Offline');
-      }
+      // Header always shows "Online" when the WebSocket is connected to Rick.
+      // WhatsApp status is shown separately in the settings panel badge.
       updateWhatsAppStatusBadge();
       break;
 
@@ -3485,13 +3480,8 @@ function showTyping(composing) {
     statusEl.className = 'sidebar-subtitle typing';
   } else {
     el.classList.remove('visible');
-    if (whatsappConnected) {
-      statusEl.textContent = 'Online';
-      statusEl.className = 'sidebar-subtitle online';
-    } else {
-      statusEl.textContent = 'Online';
-      statusEl.className = 'sidebar-subtitle online';
-    }
+    statusEl.textContent = 'Online';
+    statusEl.className = 'sidebar-subtitle online';
   }
   scrollToBottom();
 }
