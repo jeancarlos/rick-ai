@@ -20,6 +20,8 @@ export interface IncomingMessage {
   audioUrl?: string;
   /** URLs to stored image blobs (for display in chat history) */
   imageUrls?: string[];
+  /** Generic file attachments (non-image/audio) for display in chat history */
+  fileInfos?: Array<{ url: string; name: string; mimeType: string }>;
   /** Quoted/replied-to text, if this is a reply */
   quotedText?: string;
 }

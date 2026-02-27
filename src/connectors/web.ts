@@ -53,11 +53,11 @@ export interface WebAgentBridge {
   /** Stop edit mode (returns error message or empty string on success) */
   stopEditMode(): Promise<string>;
   /** Get conversation history for a user */
-  getConversationHistory(userPhone: string, limit?: number): Promise<Array<{ role: string; content: string; created_at?: string; audio_url?: string; image_urls?: string[]; message_type?: string }>>;
+  getConversationHistory(userPhone: string, limit?: number): Promise<Array<{ role: string; content: string; created_at?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }>; message_type?: string }>>;
   /** Get message history for a sub-agent session */
-  getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[] }>>;
+  getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>>;
   /** Get message history for the active edit session */
-  getEditHistory(): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[] }>>;
+  getEditHistory(): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>>;
   /** Send audio transcription update to all web clients */
   sendTranscription(audioUrl: string, transcription: string): void;
   /** Clear conversation history for a user */
@@ -468,6 +468,8 @@ export class WebConnector implements Connector {
 
     // Conteúdo textual extraído de arquivos de texto (txt, csv, json, etc.)
     const fileTexts: string[] = [];
+    // Generic file attachments (non-image/non-audio) for chat history display
+    const fileInfos: Array<{ url: string; name: string; mimeType: string }> = [];
 
     for (const f of files) {
       const buffer = Buffer.from(f.base64, "base64");
@@ -491,15 +493,25 @@ export class WebConnector implements Connector {
         f.mimeType === "application/xml" ||
         f.mimeType === "application/javascript"
       ) {
-        // Arquivos de texto: decodificar conteúdo e incluir no prompt
+        // Arquivos de texto: decodificar conteúdo e incluir no prompt para o LLM
         const content = buffer.toString("utf-8");
         const fileName = f.name || "arquivo";
         fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
         logger.info({ type: "text-file", size: buffer.length, mimeType: f.mimeType, name: fileName }, "Web text file received");
+        // Também salvar o blob para exibição no histórico com card de arquivo
+        try {
+          const id = genId();
+          await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
+          fileInfos.push({ url: `/file/${id}`, name: fileName, mimeType: f.mimeType });
+          logger.info({ fileUrl: `/file/${id}`, name: fileName }, "Text file blob saved");
+        } catch (err) {
+          logger.error({ err }, "Failed to save text file blob");
+        }
       } else if (f.mimeType === "application/pdf") {
         // PDFs: passar como media (Claude suporta PDFs como documentos)
         const attachment: MediaAttachment = { data: buffer, mimeType: f.mimeType };
         imageMedias.push(attachment);
+        const fileName = f.name || "documento.pdf";
         logger.info({ type: "pdf", size: buffer.length, name: f.name }, "Web PDF received");
         try {
           const id = genId();
@@ -509,8 +521,17 @@ export class WebConnector implements Connector {
           logger.error({ err }, "Failed to save PDF blob");
         }
       } else {
-        // Outros tipos binários: tentar como media e registrar aviso
-        logger.warn({ mimeType: f.mimeType, name: f.name }, "Unsupported file type received, skipping");
+        // Outros tipos binários: salvar e mostrar como card de arquivo genérico
+        const fileName = f.name || "arquivo";
+        logger.info({ mimeType: f.mimeType, name: fileName }, "Generic file received");
+        try {
+          const id = genId();
+          await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
+          fileInfos.push({ url: `/file/${id}`, name: fileName, mimeType: f.mimeType });
+          logger.info({ fileUrl: `/file/${id}`, name: fileName }, "Generic file blob saved");
+        } catch (err) {
+          logger.error({ err }, "Failed to save generic file blob");
+        }
       }
     }
 
@@ -550,6 +571,7 @@ export class WebConnector implements Connector {
     if (clientSessionId) echoPayload.sessionId = clientSessionId;
     if (audioUrl) echoPayload.audioUrl = audioUrl;
     if (imageUrls.length > 0) echoPayload.imageUrls = imageUrls;
+    if (fileInfos.length > 0) echoPayload.fileInfos = fileInfos;
     this.broadcastToAuthenticated(echoPayload);
 
     const incoming: AgentIncomingMessage = {
@@ -560,6 +582,7 @@ export class WebConnector implements Connector {
       imageMedias: imageMedias.length > 0 ? imageMedias : undefined,
       audioUrl,
       imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
+      fileInfos: fileInfos.length > 0 ? fileInfos : undefined,
     };
 
     const response = await this.manager.handleIncomingMessage(incoming);

@@ -15,6 +15,12 @@ export interface Memory {
   updated_at: Date;
 }
 
+export interface FileInfo {
+  url: string;
+  name: string;
+  mimeType: string;
+}
+
 export interface ConversationMessage {
   role: "user" | "assistant" | "system";
   content: string;
@@ -22,6 +28,7 @@ export interface ConversationMessage {
   message_type?: "text" | "tool_use";
   audio_url?: string;
   image_urls?: string[];
+  file_infos?: FileInfo[];
 }
 
 export class MemoryService {
@@ -202,14 +209,16 @@ export class MemoryService {
     tokensUsed?: number,
     audioUrl?: string,
     imageUrls?: string[],
-    messageType?: "text" | "tool_use"
+    messageType?: "text" | "tool_use",
+    fileInfos?: FileInfo[]
   ): Promise<void> {
     // Store image URLs as JSON array string in image_url column
     const imageUrlValue = imageUrls && imageUrls.length > 0 ? JSON.stringify(imageUrls) : null;
+    const fileInfosValue = fileInfos && fileInfos.length > 0 ? JSON.stringify(fileInfos) : null;
     await query(
-      `INSERT INTO conversations (user_phone, role, content, model_used, tokens_used, audio_url, image_url, message_type)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [userPhone, role, content, modelUsed || null, tokensUsed || null, audioUrl || null, imageUrlValue, messageType || "text"]
+      `INSERT INTO conversations (user_phone, role, content, model_used, tokens_used, audio_url, image_url, message_type, file_infos)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [userPhone, role, content, modelUsed || null, tokensUsed || null, audioUrl || null, imageUrlValue, messageType || "text", fileInfosValue]
     );
 
     // Prune old conversation messages for this user (keep most recent N)
@@ -241,7 +250,7 @@ export class MemoryService {
   ): Promise<ConversationMessage[]> {
     const maxMessages = limit || config.conversationHistoryLimit;
     const result = await query(
-      `SELECT role, content, created_at, audio_url, image_url, message_type FROM conversations
+      `SELECT role, content, created_at, audio_url, image_url, message_type, file_infos FROM conversations
        WHERE user_phone = $1
        ORDER BY created_at DESC
        LIMIT $2`,
@@ -260,6 +269,14 @@ export class MemoryService {
         } catch {
           // Legacy single URL string
           msg.image_urls = [row.image_url];
+        }
+      }
+      if (row.file_infos) {
+        try {
+          const parsed = JSON.parse(row.file_infos);
+          msg.file_infos = Array.isArray(parsed) ? parsed : undefined;
+        } catch {
+          // Ignore malformed JSON
         }
       }
       return msg;

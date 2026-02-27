@@ -151,8 +151,8 @@ export function startHealthServer(port: number): void {
       return;
     }
 
-    // Media blob endpoint: /audio/:id or /img/:id (both use audio_blobs table)
-    const mediaMatch = req.url?.match(/^\/(audio|img)\/([a-f0-9]{16})$/);
+    // Media blob endpoint: /audio/:id, /img/:id or /file/:id (all use audio_blobs table)
+    const mediaMatch = req.url?.match(/^\/(audio|img|file)\/([a-f0-9]{16})$/);
     if (mediaMatch && req.method === "GET") {
       try {
         const result = await query(
@@ -187,12 +187,17 @@ export function startHealthServer(port: number): void {
           }
         }
 
-        res.writeHead(200, {
+        const responseHeaders: Record<string, string | number> = {
           "Content-Type": mime_type,
           "Content-Length": totalLength,
           "Accept-Ranges": "bytes",
           "Cache-Control": "public, max-age=31536000, immutable",
-        });
+        };
+        // For generic file downloads, add Content-Disposition so browser prompts download
+        if (mediaMatch[1] === "file") {
+          responseHeaders["Content-Disposition"] = "attachment";
+        }
+        res.writeHead(200, responseHeaders);
         res.end(buffer);
       } catch (err) {
         logger.error({ err }, "Failed to serve media blob");

@@ -122,7 +122,7 @@ export class Agent {
   }
 
   private async handleMessageInternal(msg: IncomingMessage): Promise<string> {
-    const { connectorName, userId: userPhone, userName, text: rawText, media, imageMedias, quotedText, audioUrl, imageUrls } = msg;
+    const { connectorName, userId: userPhone, userName, text: rawText, media, imageMedias, quotedText, audioUrl, imageUrls, fileInfos } = msg;
 
     // Get or create user
     const user = await this.memory.getOrCreateUser(userPhone, userName);
@@ -219,9 +219,10 @@ export class Agent {
       try {
         const { query: dbSaveUser } = await import("./memory/db.js");
         const editImageUrlsJson = imageUrls && imageUrls.length > 0 ? JSON.stringify(imageUrls) : null;
+        const editFileInfosJson = fileInfos && fileInfos.length > 0 ? JSON.stringify(fileInfos) : null;
         await dbSaveUser(
-          `INSERT INTO session_messages (session_id, role, content, message_type, audio_url, image_urls) VALUES ($1, $2, $3, $4, $5, $6)`,
-          [editSessionIdForSave, "user", fullText, "text", audioUrl || null, editImageUrlsJson]
+          `INSERT INTO session_messages (session_id, role, content, message_type, audio_url, image_urls, file_infos) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [editSessionIdForSave, "user", fullText, "text", audioUrl || null, editImageUrlsJson, editFileInfosJson]
         );
       } catch (err) {
         logger.warn({ err }, "Failed to save edit session user message");
@@ -296,7 +297,7 @@ export class Agent {
       // 2. Continuidade (adjust/fix on the same session)
       // 3. Novo pedido (different topic → nag to close first)
       if (this.sessionManager.hasDoneSessions()) {
-        return this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias);
+        return this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias, fileInfos);
       }
 
       // Classify the task — does it need a sub-agent?
@@ -319,7 +320,8 @@ export class Agent {
           {},
           audioUrl,
           imageUrls,
-          allImageMedias
+          allImageMedias,
+          fileInfos
         );
       }
 
@@ -333,7 +335,7 @@ export class Agent {
       } else if (!routingMedia && imageMedias && imageMedias.length > 0) {
         allMedia = imageMedias.length === 1 ? imageMedias[0] : imageMedias;
       }
-      return this.handleSimpleChat(userPhone, user.name, fullText, allMedia, audioUrl, imageUrls);
+      return this.handleSimpleChat(userPhone, user.name, fullText, allMedia, audioUrl, imageUrls, fileInfos);
     } finally {
       await this.connectorManager.setTyping(connectorName, userPhone, false);
     }
@@ -348,7 +350,8 @@ export class Agent {
     text: string,
     media?: MediaAttachment | MediaAttachment[],
     audioUrl?: string,
-    imageUrls?: string[]
+    imageUrls?: string[],
+    fileInfos?: Array<{ url: string; name: string; mimeType: string }>
   ): Promise<string> {
     const memoryContext = await this.memory.buildMemoryContext(userPhone);
     const semanticContext = await this.buildSemanticContext(userPhone, text);
@@ -368,7 +371,7 @@ export class Agent {
     ];
 
     // Save user message BEFORE the LLM call so it persists even if the call fails/crashes
-    await this.memory.saveMessage(userPhone, "user", text, undefined, undefined, audioUrl, imageUrls);
+    await this.memory.saveMessage(userPhone, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
 
     let response;
     try {
@@ -400,7 +403,8 @@ export class Agent {
     preResolvedCredentials: Record<string, string> = {},
     audioUrl?: string,
     imageUrls?: string[],
-    imageMedias?: MediaAttachment[]
+    imageMedias?: MediaAttachment[],
+    fileInfos?: Array<{ url: string; name: string; mimeType: string }>
   ): Promise<string> {
     // Build env vars for the sub-agent container — all available LLM keys
     const env: Record<string, string> = {};
@@ -484,7 +488,7 @@ export class Agent {
       };
 
       const missingList = missing.map((m) => `*${m}*`).join(", ");
-      await this.memory.saveMessage(userPhone, "user", userMessage, undefined, undefined, audioUrl, imageUrls);
+      await this.memory.saveMessage(userPhone, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
       return `Vou precisar de credenciais para ${missingList} pra fazer isso.\n\nMe manda as credenciais de *${missing[0]}* (usuario, senha, token, o que for necessario).`;
     }
 
@@ -492,7 +496,7 @@ export class Agent {
       logger.info({ missing, resolved: Object.keys(resolved) }, "Proceeding with partial credentials");
     }
 
-    await this.memory.saveMessage(userPhone, "user", userMessage, undefined, undefined, audioUrl, imageUrls);
+    await this.memory.saveMessage(userPhone, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
 
     // Start the sub-agent container
     let session;
@@ -663,7 +667,8 @@ export class Agent {
     text: string,
     audioUrl?: string,
     imageUrls?: string[],
-    imageMedias?: MediaAttachment[]
+    imageMedias?: MediaAttachment[],
+    fileInfos?: Array<{ url: string; name: string; mimeType: string }>
   ): Promise<string> {
     const doneSessions = this.sessionManager.getDoneSessions();
     if (doneSessions.length === 0) return "Nenhuma sessao pendente.";
@@ -729,9 +734,9 @@ export class Agent {
     }
 
     // CASE 2: Continuation — relay to the most recent done session
-    await this.memory.saveMessage(userPhone, "user", text, undefined, undefined, audioUrl, imageUrls);
+    await this.memory.saveMessage(userPhone, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
 
-    this.sessionManager.sendToSession(mostRecent.id, text, imageMedias, audioUrl, imageUrls).catch(async (err) => {
+    this.sessionManager.sendToSession(mostRecent.id, text, imageMedias, audioUrl, imageUrls, fileInfos).catch(async (err) => {
       logger.error({ err }, "Sub-agent relay failed");
       await this.connectorManager.sendMessage(
         connectorName, userPhone,
@@ -1889,16 +1894,16 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         return this.sessionManager.getSessionHistory(sessionId);
       },
 
-      getEditHistory: async (): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[] }>> => {
+      getEditHistory: async (): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>> => {
         if (!this.editSession) return [];
         try {
           const { query: dbQuery } = await import("./memory/db.js");
           const result = await dbQuery(
-            `SELECT role, content, created_at, message_type, audio_url, image_urls FROM session_messages WHERE session_id = $1 ORDER BY created_at ASC`,
+            `SELECT role, content, created_at, message_type, audio_url, image_urls, file_infos FROM session_messages WHERE session_id = $1 ORDER BY created_at ASC`,
             [this.editSession.id]
           );
           return result.rows.map((row: any) => {
-            const msg: { role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[] } = {
+            const msg: { role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> } = {
               role: row.role,
               content: row.content,
               created_at: row.created_at,
@@ -1911,6 +1916,14 @@ Retorne APENAS as linhas de extracao, nada mais.`;
                 msg.image_urls = Array.isArray(parsed) ? parsed : [row.image_urls];
               } catch {
                 msg.image_urls = [row.image_urls];
+              }
+            }
+            if (row.file_infos) {
+              try {
+                const parsed = JSON.parse(row.file_infos);
+                msg.file_infos = Array.isArray(parsed) ? parsed : undefined;
+              } catch {
+                // Ignore malformed JSON
               }
             }
             return msg;

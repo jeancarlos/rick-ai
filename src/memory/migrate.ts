@@ -161,6 +161,14 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS image_urls TEXT`,
     ],
   },
+  {
+    name: "008_file_infos",
+    statements: [
+      // Generic file attachments metadata (JSON array of {url, name, mimeType})
+      `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS file_infos TEXT`,
+      `ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS file_infos TEXT`,
+    ],
+  },
 ];
 
 export async function runMigrations(): Promise<void> {

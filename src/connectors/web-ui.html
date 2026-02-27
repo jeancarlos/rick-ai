@@ -571,7 +571,8 @@
 
   /* Media messages — override pre-wrap to allow block layout */
   .message:has(.audio-message),
-  .message:has(.image-message) {
+  .message:has(.image-message),
+  .message:has(.file-attachment) {
     white-space: normal;
     min-width: 260px;
   }
@@ -760,6 +761,59 @@
     0% { opacity: 0.4; }
     50% { opacity: 0.8; }
     100% { opacity: 0.4; }
+  }
+
+  /* Generic file attachment cards (non-image/audio) shown in chat history */
+  .message:has(.file-attachment) {
+    white-space: normal;
+    min-width: 180px;
+  }
+
+  .file-attachment {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    max-width: 280px;
+    margin-bottom: 4px;
+    text-decoration: none;
+    color: inherit;
+    transition: background 0.15s;
+  }
+
+  .file-attachment:hover {
+    background: var(--bg-hover, rgba(255,255,255,0.06));
+  }
+
+  .file-attachment .file-icon {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+
+  .file-attachment .file-details {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .file-attachment .file-name {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .file-attachment .file-type {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-top: 2px;
   }
 
   /* Typing indicator */
@@ -2388,6 +2442,7 @@ var pendingFileReads = [];      // in-flight FileReader promises
 var pendingAudio = null;        // { blob, mimeType, localUrl } — set after recording stops
 var pendingAudioEcho = false;
 var pendingImageEcho = false;
+var pendingFileEcho = false;
 var pendingUserEcho = false;
 var reconnectAttempts = 0;
 var reconnectTimer = null;
@@ -2554,21 +2609,24 @@ function handleServerMessage(msg) {
       var sid = msg.sessionId || (editModeActive ? 'edit' : 'main');
       var from = msg.from === 'agent' ? 'agent' : 'user';
       var echoImageUrls = msg.imageUrls || (msg.imageUrl ? [msg.imageUrl] : null);
+      var echoFileInfos = msg.fileInfos || null;
       // Skip echo for user messages — already shown locally
       if (from === 'user' && pendingUserEcho) {
         pendingUserEcho = false;
         // Update stored media URLs from local blob/data to server URLs
-        if (pendingAudioEcho || pendingImageEcho) {
+        if (pendingAudioEcho || pendingImageEcho || pendingFileEcho) {
           var msgs = sessionMessages[sid] || [];
           for (var k = msgs.length - 1; k >= 0; k--) {
             if (msgs[k].from === 'user') {
               if (pendingAudioEcho && msg.audioUrl) msgs[k].audioUrl = msg.audioUrl;
               if (pendingImageEcho && echoImageUrls) msgs[k].imageUrls = echoImageUrls;
+              if (pendingFileEcho && echoFileInfos) msgs[k].fileInfos = echoFileInfos;
               break;
             }
           }
           pendingAudioEcho = false;
           pendingImageEcho = false;
+          pendingFileEcho = false;
         }
         break;
       }
@@ -2580,9 +2638,9 @@ function handleServerMessage(msg) {
       )) {
         deployInProgress = true;
       }
-      storeMessage(sid, msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null);
+      storeMessage(sid, msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null, echoFileInfos);
       if (sid === currentSessionId) {
-        appendMessageToDOM(msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null);
+        appendMessageToDOM(msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null, echoFileInfos);
       }
       break;
 
@@ -2872,7 +2930,7 @@ function killSession(sessionId) {
   updateEphemeralSessions(ephemeralSessions);
 }
 
-function storeMessage(sessionId, text, from, audioUrl, imageUrls, messageType) {
+function storeMessage(sessionId, text, from, audioUrl, imageUrls, messageType, fileInfos) {
   if (!sessionMessages[sessionId]) {
     sessionMessages[sessionId] = [];
   }
@@ -2880,6 +2938,7 @@ function storeMessage(sessionId, text, from, audioUrl, imageUrls, messageType) {
   if (audioUrl) entry.audioUrl = audioUrl;
   if (imageUrls) entry.imageUrls = imageUrls;
   if (messageType) entry.messageType = messageType;
+  if (fileInfos && fileInfos.length > 0) entry.fileInfos = fileInfos;
   sessionMessages[sessionId].push(entry);
 }
 
@@ -2915,7 +2974,7 @@ function renderSessionMessages(sessionId) {
 
       var div = document.createElement('div');
       div.className = 'message ' + m.from;
-      div.innerHTML = renderMessageContent(m.text, m.audioUrl, m.imageUrls);
+      div.innerHTML = renderMessageContent(m.text, m.audioUrl, m.imageUrls, m.fileInfos);
 
       var time = document.createElement('div');
       time.className = 'time';
@@ -2940,6 +2999,7 @@ function loadHistory(messages) {
     if (msg.audio_url) entry.audioUrl = msg.audio_url;
     if (msg.image_urls) entry.imageUrls = msg.image_urls;
     if (msg.message_type) entry.messageType = msg.message_type;
+    if (msg.file_infos && msg.file_infos.length > 0) entry.fileInfos = msg.file_infos;
     sessionMessages['main'].push(entry);
   }
   // Only render if we're viewing main session
@@ -2965,6 +3025,12 @@ function loadEditHistory(messages) {
       } catch (e) {
         ehEntry.imageUrls = [ehMsg.image_urls];
       }
+    }
+    if (ehMsg.file_infos) {
+      try {
+        var parsedFi = Array.isArray(ehMsg.file_infos) ? ehMsg.file_infos : JSON.parse(ehMsg.file_infos);
+        if (parsedFi && parsedFi.length > 0) ehEntry.fileInfos = parsedFi;
+      } catch (e) { /* ignore */ }
     }
     sessionMessages['edit'].push(ehEntry);
   }
@@ -3059,7 +3125,7 @@ function makeToolUseBlock() {
   return block;
 }
 
-function appendMessageToDOM(text, from, audioUrl, imageUrls, messageType) {
+function appendMessageToDOM(text, from, audioUrl, imageUrls, messageType, fileInfos) {
   var container = document.getElementById('messages-main');
   var typing = document.getElementById('typing-indicator');
 
@@ -3088,7 +3154,7 @@ function appendMessageToDOM(text, from, audioUrl, imageUrls, messageType) {
   // Regular message — any non-tool_use message breaks the terminal grouping
   var div = document.createElement('div');
   div.className = 'message ' + from;
-  div.innerHTML = renderMessageContent(text, audioUrl, imageUrls);
+  div.innerHTML = renderMessageContent(text, audioUrl, imageUrls, fileInfos);
 
   var time = document.createElement('div');
   time.className = 'time';
@@ -3099,9 +3165,40 @@ function appendMessageToDOM(text, from, audioUrl, imageUrls, messageType) {
   scrollToBottom();
 }
 
-function renderMessageContent(text, audioUrl, imageUrls) {
+// Returns an emoji icon for a given MIME type
+function getFileIcon(mimeType) {
+  if (!mimeType) return '📄';
+  if (mimeType.startsWith('text/')) return '📝';
+  if (mimeType === 'application/pdf') return '📕';
+  if (mimeType === 'application/json') return '📋';
+  if (mimeType === 'application/xml' || mimeType === 'text/xml') return '📋';
+  if (mimeType === 'application/javascript' || mimeType === 'text/javascript') return '📜';
+  if (mimeType.startsWith('application/zip') || mimeType.includes('compressed') || mimeType.includes('zip')) return '🗜️';
+  if (mimeType.startsWith('application/vnd.ms-excel') || mimeType.includes('spreadsheet')) return '📊';
+  if (mimeType.startsWith('application/vnd.ms-powerpoint') || mimeType.includes('presentation')) return '📊';
+  if (mimeType.startsWith('application/msword') || mimeType.includes('wordprocessing')) return '📝';
+  if (mimeType.startsWith('video/')) return '🎬';
+  return '📎';
+}
+
+// Returns a short human-readable label for a MIME type
+function getFileTypeLabel(mimeType) {
+  if (!mimeType) return 'Arquivo';
+  if (mimeType === 'text/plain') return 'Texto';
+  if (mimeType === 'text/csv') return 'CSV';
+  if (mimeType === 'text/html') return 'HTML';
+  if (mimeType === 'application/pdf') return 'PDF';
+  if (mimeType === 'application/json') return 'JSON';
+  if (mimeType === 'application/xml' || mimeType === 'text/xml') return 'XML';
+  if (mimeType === 'application/javascript' || mimeType === 'text/javascript') return 'JavaScript';
+  var parts = mimeType.split('/');
+  return parts[1] ? parts[1].toUpperCase().substring(0, 10) : 'Arquivo';
+}
+
+function renderMessageContent(text, audioUrl, imageUrls, fileInfos) {
   var html = '';
   var hasImages = imageUrls && imageUrls.length > 0;
+  var hasFileInfos = fileInfos && fileInfos.length > 0;
 
   // Extract transcription from [Áudio transcrito: "..."] tag — present in edit mode after F5 reload
   var audioTranscricao = null;
@@ -3110,6 +3207,14 @@ function renderMessageContent(text, audioUrl, imageUrls) {
     if (transcricaoMatch) {
       audioTranscricao = transcricaoMatch[1];
     }
+  }
+
+  // Strip embedded file content blocks from displayed text when fileInfos is available
+  // The backend embeds file content as: \n\n[Conteúdo do arquivo "name"]:\ncontent...
+  var displayText = text;
+  if (hasFileInfos && displayText) {
+    // Remove all [Conteúdo do arquivo "..."]:\n... blocks from the displayed text
+    displayText = displayText.replace(/\n\n\[Conteúdo do arquivo "[^"]*"\]:[\s\S]*/g, '').trim();
   }
 
   // Image attachments (supports multiple)
@@ -3128,10 +3233,10 @@ function renderMessageContent(text, audioUrl, imageUrls) {
     if (audioTranscricao) {
       // Transcription embedded in the saved content (edit mode after F5 reload)
       html += '<blockquote class="audio-transcription">' + renderText(audioTranscricao) + '</blockquote>';
-    } else if (text) {
-      var isPlaceholder = /^O usuario enviou um audio/i.test(text);
+    } else if (displayText) {
+      var isPlaceholder = /^O usuario enviou um audio/i.test(displayText);
       if (!isPlaceholder) {
-        var cleanText = text.replace(/^aqui\s+est[aá]\s+a\s+transcri[cç][aã]o.*?:\s*/i, '');
+        var cleanText = displayText.replace(/^aqui\s+est[aá]\s+a\s+transcri[cç][aã]o.*?:\s*/i, '');
         cleanText = cleanText.replace(/^[""](.+)[""]$/, '$1');
         if (cleanText.trim()) {
           html += '<blockquote class="audio-transcription">' + renderText(cleanText) + '</blockquote>';
@@ -3145,18 +3250,47 @@ function renderMessageContent(text, audioUrl, imageUrls) {
     html += '</div>';
   }
 
+  // Generic file attachment cards (non-image/audio files)
+  if (hasFileInfos) {
+    for (var fi = 0; fi < fileInfos.length; fi++) {
+      var fi_info = fileInfos[fi];
+      var fi_icon = getFileIcon(fi_info.mimeType);
+      var fi_label = getFileTypeLabel(fi_info.mimeType);
+      var fi_name = fi_info.name || 'arquivo';
+      if (fi_info.url) {
+        // Has server URL — render as download link
+        html += '<a class="file-attachment" href="' + fi_info.url + '" download="' + fi_name.replace(/"/g, '&quot;') + '" target="_blank">';
+      } else {
+        // No URL yet (pending server echo) — render as non-clickable card
+        html += '<div class="file-attachment">';
+      }
+      html += '<span class="file-icon">' + fi_icon + '</span>';
+      html += '<div class="file-details">';
+      html += '<span class="file-name" title="' + fi_name.replace(/"/g, '&quot;') + '">' + escapeHtml(fi_name) + '</span>';
+      html += '<span class="file-type">' + escapeHtml(fi_label) + '</span>';
+      html += '</div>';
+      html += fi_info.url ? '</a>' : '</div>';
+    }
+  }
+
   // If we had media, only show text if it's not a placeholder
   if (hasImages || audioUrl) {
-    if (text && audioUrl && !hasImages) return html;
-    if (text && hasImages) {
-      var isImgPlaceholder = /^O usuario enviou (uma imagem|\d+ imagens)/i.test(text);
-      var isAudioPlaceholder = /^O usuario enviou um audio/i.test(text);
+    if (displayText && audioUrl && !hasImages) return html;
+    if (displayText && hasImages) {
+      var isImgPlaceholder = /^O usuario enviou (uma imagem|\d+ imagens)/i.test(displayText);
+      var isAudioPlaceholder = /^O usuario enviou um audio/i.test(displayText);
       var hasTranscricaoTag = audioTranscricao !== null;
       if (!isImgPlaceholder && !isAudioPlaceholder && !hasTranscricaoTag) {
-        html += renderText(text);
+        html += renderText(displayText);
       }
     }
-    return html || renderText(text);
+    return html || renderText(displayText);
+  }
+
+  // If we have file attachments, show remaining user text (not the embedded content)
+  if (hasFileInfos) {
+    if (displayText) html += renderText(displayText);
+    return html || '';
   }
 
   return renderText(text);
@@ -3435,8 +3569,14 @@ async function sendMessage() {
   var hasFiles = pendingFiles.length > 0;
   // imageFiles: apenas imagens, usadas para preview/eco local
   var imageFiles = [];
+  // nonImageFiles: arquivos não-imagem e não-áudio (txt, pdf, etc.)
+  var nonImageFiles = [];
   for (var fi = 0; fi < pendingFiles.length; fi++) {
-    if (pendingFiles[fi].mimeType.startsWith('image/')) imageFiles.push(pendingFiles[fi]);
+    if (pendingFiles[fi].mimeType.startsWith('image/')) {
+      imageFiles.push(pendingFiles[fi]);
+    } else {
+      nonImageFiles.push(pendingFiles[fi]);
+    }
   }
 
   if (!text && !hasAudio && !hasFiles) return;
@@ -3455,17 +3595,23 @@ async function sendMessage() {
   for (var li = 0; li < imageFiles.length; li++) {
     localImageUrls.push('data:' + imageFiles[li].mimeType + ';base64,' + imageFiles[li].base64);
   }
+  // Local file infos for non-image files (sem URL de download ainda — será atualizado pelo echo do servidor)
+  var localFileInfos = [];
+  for (var lf = 0; lf < nonImageFiles.length; lf++) {
+    localFileInfos.push({ url: null, name: nonImageFiles[lf].name || 'arquivo', mimeType: nonImageFiles[lf].mimeType });
+  }
 
   // Set echo flags
   if (hasAudio) pendingAudioEcho = true;
   if (localImageUrls.length > 0) pendingImageEcho = true;
+  if (localFileInfos.length > 0) pendingFileEcho = true;
 
    // Show message locally immediately (all user messages, not just media)
    var sid = currentSessionId || 'main';
    pendingUserEcho = true;
-   storeMessage(sid, text, 'user', localAudioUrl, localImageUrls.length > 0 ? localImageUrls : null);
+   storeMessage(sid, text, 'user', localAudioUrl, localImageUrls.length > 0 ? localImageUrls : null, null, localFileInfos.length > 0 ? localFileInfos : null);
    if (sid === currentSessionId) {
-     appendMessageToDOM(text, 'user', localAudioUrl, localImageUrls.length > 0 ? localImageUrls : null);
+     appendMessageToDOM(text, 'user', localAudioUrl, localImageUrls.length > 0 ? localImageUrls : null, null, localFileInfos.length > 0 ? localFileInfos : null);
    }
 
   // Build files array for payload — inclui TODOS os arquivos (imagens e não-imagens)
@@ -3838,6 +3984,9 @@ function renderAttachmentsPreviews() {
     html += '<div class="attachment-chip">';
     if (f.previewUrl) {
       html += '<img src="' + f.previewUrl + '" alt="">';
+    } else {
+      // Non-image file: show emoji icon
+      html += '<span style="font-size:1.4rem;flex-shrink:0;">' + getFileIcon(f.mimeType) + '</span>';
     }
     html += '<span class="chip-name">' + escapeHtml(f.name) + '</span>';
     html += '<button class="chip-remove" onclick="removeFile(' + i + ')" title="Remover">&times;</button>';
