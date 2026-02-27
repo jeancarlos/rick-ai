@@ -11,6 +11,7 @@ services:
       - "80:80"
     volumes:
       - ./auth_info:/app/auth_info
+      - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
       - ./scripts:/app/scripts:ro
     healthcheck:

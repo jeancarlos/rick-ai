@@ -4920,7 +4920,7 @@ function waitForRestart(expectedVersion) {
 
     attempts++;
     var pct = Math.min(85 + Math.floor(attempts * 0.25), 99);
-    codeOpStatus('Aguardando Rick reiniciar... (' + attempts + '/' + maxAttempts + ')', { spinning: true, progress: pct });
+    codeOpStatus('Aguardando Rick reiniciar... isso costuma levar menos de 30 segundos', { spinning: true, progress: pct });
 
     fetch('/health', { signal: AbortSignal.timeout(3000) })
       .then(function(r) { return r.json(); })
