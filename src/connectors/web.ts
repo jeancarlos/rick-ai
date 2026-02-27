@@ -86,6 +86,8 @@ export class WebConnector implements Connector {
   private agentBridge: WebAgentBridge | null = null;
   /** Tracks whether the agent is currently typing, so reconnecting clients restore the indicator */
   private currentlyTyping = false;
+  /** Cached QR code data URL so late-connecting clients can still see the current QR */
+  private pendingQrDataUrl: string | null = null;
   private claudeOAuth = new ClaudeOAuthService();
   private openaiOAuth = new OpenAIOAuthService();
   constructor(manager: ConnectorManager) {
@@ -100,14 +102,16 @@ export class WebConnector implements Connector {
     whatsapp.onQrCode((qr: string) => {
       QRCode.toDataURL(qr, { margin: 1, scale: 6 })
         .then((dataUrl) => {
+          this.pendingQrDataUrl = dataUrl;
           this.broadcastToAuthenticated({ type: "qr", data: dataUrl });
         })
         .catch(() => {
-          // Fallback: envia o texto cru se a geração da imagem falhar
+          this.pendingQrDataUrl = qr;
           this.broadcastToAuthenticated({ type: "qr", data: qr });
         });
     });
     whatsapp.onConnectionChange((connected: boolean) => {
+      if (connected) this.pendingQrDataUrl = null; // QR no longer needed
       this.broadcastToAuthenticated({ type: "status", whatsapp: connected });
     });
   }
@@ -802,7 +806,10 @@ export class WebConnector implements Connector {
     }
 
     if (this.whatsappConnector.isStarting()) {
-      // Socket já foi criado e está aguardando QR — nada a fazer
+      // Socket already created and waiting for QR scan — send the cached QR if available
+      if (this.pendingQrDataUrl) {
+        this.send(ws, { type: "qr", data: this.pendingQrDataUrl });
+      }
       return;
     }
 
