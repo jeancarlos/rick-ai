@@ -212,6 +212,9 @@ export class WhatsAppConnector implements Connector {
   async disconnectForRelogin(): Promise<void> {
     this.manualDisconnectInProgress = true;
 
+    // Remove creds listener first to prevent re-writes during cleanup
+    try { this.sock?.ev.removeAllListeners("creds.update"); } catch {}
+
     try {
       if (this.sock) {
         await this.sock.logout();
@@ -221,7 +224,18 @@ export class WhatsAppConnector implements Connector {
     }
 
     await this.stop();
-    await fs.rm(AUTH_DIR, { recursive: true, force: true });
+
+    // Retry rm up to 3 times — EBUSY can happen if file handles linger
+    for (let i = 0; i < 3; i++) {
+      try {
+        await fs.rm(AUTH_DIR, { recursive: true, force: true });
+        break;
+      } catch (err) {
+        if (i < 2) await new Promise(r => setTimeout(r, 500));
+        else logger.warn({ err }, "Could not fully remove auth_info — will be cleaned on next start");
+      }
+    }
+
     this.reconnectAttempts = 0;
     await this.start();
   }
