@@ -121,14 +121,9 @@ export class OpenAIProvider implements LLMProvider {
     const model = modelId || "gpt-5.3-codex";
 
     // Build Responses API input format
+    // Note: system prompt goes in the top-level `instructions` field (required by Codex API),
+    // NOT as a role:"developer" message inside the input array.
     const input: any[] = [];
-
-    if (systemPrompt) {
-      input.push({
-        role: "developer",
-        content: systemPrompt,
-      });
-    }
 
     for (const msg of messages) {
       if (msg.role === "system") continue;
@@ -145,8 +140,9 @@ export class OpenAIProvider implements LLMProvider {
       }
     }
 
-    const body = {
+    const body: Record<string, unknown> = {
       model,
+      instructions: systemPrompt || "",
       input,
       store: false,
       stream: false,

@@ -1211,10 +1211,19 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
       return "Voce ja esta no modo de edicao. Use */exit* para sair ou */deploy* para aplicar.";
     }
 
-    // Claude OAuth is required for edit mode
+    // Claude OAuth is preferred for edit mode; fall back to GPT if not connected
     const claudeToken = await this.claudeOAuth.getValidToken(userPhone);
+    let gptOnly = false;
     if (!claudeToken) {
-      return "Claude nao esta conectado. Use */conectar claude* primeiro — o modo de edicao usa Claude Code.";
+      const gptToken = await this.openaiOAuth.getValidToken(userPhone);
+      if (!gptToken) {
+        return (
+          "Nenhum modelo conectado para o modo de edicao.\n\n" +
+          "- */conectar claude* — recomendado (Claude Code com edicao autonoma de arquivos)\n" +
+          "- */conectar gpt* — alternativa (GPT como assistente de codigo)"
+        );
+      }
+      gptOnly = true;
     }
 
     // Auth expired callback: tries to refresh token, if fails sends OAuth link
@@ -1326,24 +1335,29 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
       saveHistoryCb,
       onCloseCb,
       this.memory,
+      gptOnly,
     );
 
     // Build env for the container
     const env: Record<string, string> = {};
     env.GEMINI_API_KEY = config.gemini.apiKey;
-    env.CLAUDE_CODE_OAUTH_TOKEN = claudeToken;
 
-    // Get refresh token from DB
-    try {
-      const { query } = await import("./memory/db.js");
-      const result = await query(
-        `SELECT refresh_token FROM oauth_tokens WHERE user_phone = $1 AND provider = 'claude' AND is_active = TRUE`,
-        [userPhone]
-      );
-      if (result.rows[0]?.refresh_token) {
-        env.CLAUDE_REFRESH_TOKEN = result.rows[0].refresh_token;
-      }
-    } catch (_) { /* ignore */ }
+    // Only inject Claude credentials when Claude is available
+    if (!gptOnly && claudeToken) {
+      env.CLAUDE_CODE_OAUTH_TOKEN = claudeToken;
+
+      // Get refresh token from DB
+      try {
+        const { query } = await import("./memory/db.js");
+        const result = await query(
+          `SELECT refresh_token FROM oauth_tokens WHERE user_phone = $1 AND provider = 'claude' AND is_active = TRUE`,
+          [userPhone]
+        );
+        if (result.rows[0]?.refresh_token) {
+          env.CLAUDE_REFRESH_TOKEN = result.rows[0].refresh_token;
+        }
+      } catch (_) { /* ignore */ }
+    }
 
     // Set this.editSession BEFORE start() so that saveHistoryCb (which reads
     // this.editSession?.id) can persist the welcome message to session_messages.

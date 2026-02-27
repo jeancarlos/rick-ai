@@ -213,6 +213,8 @@ export class EditSession {
   private typingInterval: ReturnType<typeof setInterval> | null = null;
   /** The last prompt that failed due to auth — retried only if no output was produced */
   private lastFailedPrompt: { text: string; medias?: MediaAttachment[]; isContinue: boolean; hadOutput: boolean } | null = null;
+  /** When true, routes all prompts directly to GPT fallback (Claude not available) */
+  private gptOnly: boolean = false;
 
   constructor(
     connectorManager: ConnectorManager,
@@ -224,6 +226,7 @@ export class EditSession {
     saveHistory?: SaveHistoryFn,
     onClose?: OnCloseCallback,
     memoryService?: MemoryService,
+    gptOnly?: boolean,
   ) {
     this.id = randomBytes(8).toString("hex");
     this.containerName = `edit-session-${this.id}`;
@@ -247,6 +250,7 @@ export class EditSession {
     this.saveHistory = saveHistory ?? null;
     this.onClose = onClose ?? null;
     this.memoryService = memoryService ?? null;
+    this.gptOnly = gptOnly ?? false;
   }
 
   /**
@@ -414,14 +418,22 @@ export class EditSession {
       "Edit session container started"
     );
 
-    const welcomeMsg =
-      `*Modo de edicao ativado!*\n\n` +
-      `O Claude Code tem acesso ao codigo-fonte do Rick.\n` +
-      `Mande suas instrucoes diretamente — tudo vai pro Claude Code.\n\n` +
-      `Comandos:\n` +
-      `- */deploy* — aplica as mudancas (com verificacao de seguranca)\n` +
-      `- */publish* — deploy + push para o GitHub\n` +
-      `- */exit* — descarta tudo e sai do modo de edicao`;
+    const welcomeMsg = this.gptOnly
+      ? `*Modo de edicao ativado (GPT)*\n\n` +
+        `Claude nao esta conectado — usando GPT como assistente de codigo.\n` +
+        `O GPT pode sugerir alteracoes, mas nao edita arquivos diretamente.\n` +
+        `Para editar arquivos com autonomia total, conecte o Claude: */conectar claude*\n\n` +
+        `Comandos:\n` +
+        `- */deploy* — aplica as mudancas (com verificacao de seguranca)\n` +
+        `- */publish* — deploy + push para o GitHub\n` +
+        `- */exit* — descarta tudo e sai do modo de edicao`
+      : `*Modo de edicao ativado!*\n\n` +
+        `O Claude Code tem acesso ao codigo-fonte do Rick.\n` +
+        `Mande suas instrucoes diretamente — tudo vai pro Claude Code.\n\n` +
+        `Comandos:\n` +
+        `- */deploy* — aplica as mudancas (com verificacao de seguranca)\n` +
+        `- */publish* — deploy + push para o GitHub\n` +
+        `- */exit* — descarta tudo e sai do modo de edicao`;
 
     await this.sendMessage(welcomeMsg);
     await this.saveHistory?.(welcomeMsg, "text");
@@ -676,6 +688,33 @@ export class EditSession {
   }
 
   /**
+   * Send a prompt directly to GPT (gptOnly mode).
+   * Used when Claude is not connected and GPT is the primary model.
+   */
+  private async sendViaGpt(prompt: string): Promise<void> {
+    if (!this.gptFallback) {
+      await this.sendMessage(
+        "_GPT nao disponivel. Conecte o GPT com */conectar gpt* ou o Claude com */conectar claude*._"
+      );
+      return;
+    }
+
+    this.state = "running";
+    this.startTyping();
+    try {
+      const result = await this.gptFallback(prompt);
+      await this.sendMessage(result);
+      await this.saveHistory?.(result, "text");
+    } catch (err) {
+      logger.error({ err, sessionId: this.id }, "GPT-only edit session: GPT call failed");
+      await this.sendMessage(`_GPT falhou: ${(err as Error).message}_`);
+    } finally {
+      this.stopTyping();
+      this.state = "ready";
+    }
+  }
+
+  /**
    * Proactively refresh the token inside the container before each Claude invocation.
    * This prevents 401s by ensuring credentials are always fresh.
    */
@@ -720,6 +759,12 @@ export class EditSession {
       return;
     }
 
+    // GPT-only mode: route directly to GPT, skip Claude Code entirely
+    if (this.gptOnly) {
+      await this.sendViaGpt(prompt);
+      return;
+    }
+
     this.state = "running";
     await this.ensureFreshToken();
     this.lastFailedPrompt = { text: prompt, medias, isContinue: false, hadOutput: false };
@@ -750,6 +795,12 @@ export class EditSession {
     }
     if (this.state !== "ready") {
       await this.sendMessage("Aguarde, ainda estou processando...");
+      return;
+    }
+
+    // GPT-only mode: route directly to GPT, skip Claude Code entirely
+    if (this.gptOnly) {
+      await this.sendViaGpt(prompt);
       return;
     }
 
