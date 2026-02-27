@@ -74,6 +74,11 @@ export class WhatsAppConnector implements Connector {
   // ==================== Connector interface ====================
 
   async start(): Promise<void> {
+    if (this.sock !== null) {
+      logger.warn("WhatsApp connector já está iniciando ou conectado, ignorando start() duplicado.");
+      return;
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -223,6 +228,14 @@ export class WhatsAppConnector implements Connector {
   }
 
   // ==================== QR Code API ====================
+
+  /**
+   * Returns true if the socket was created but the connection is not yet
+   * authenticated (i.e. waiting for QR code scan).
+   */
+  isStarting(): boolean {
+    return this.sock !== null && this.myJid === null;
+  }
 
   /**
    * Register a listener for QR code events.

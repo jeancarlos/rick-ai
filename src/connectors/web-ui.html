@@ -3363,10 +3363,13 @@ function showQrCode(data) {
   var content = document.getElementById('qr-content');
   if (content) content.textContent = data;
 
-  // If the QR overlay is already visible (user clicked "Conectar"), keep it
-  // updated silently. If this is the very first QR code, notify once.
+  // Exibe o overlay do QR automaticamente assim que o código chegar,
+  // sem exigir que o usuário clique em "Conectar" uma segunda vez.
+  var qrOverlay = document.getElementById('qr-overlay');
+  if (qrOverlay) qrOverlay.classList.add('visible');
+
   if (isFirstQr) {
-    showToast('QR code do WhatsApp disponível em Configurações → Conectores');
+    showToast('QR code do WhatsApp pronto! Escaneie para conectar.');
   }
 }
 
@@ -4448,6 +4451,10 @@ function connectWhatsApp() {
     qrOverlay.classList.add('visible');
   } else {
     showToast('Aguardando QR code do servidor...');
+    // Solicita ao backend que inicie/retome a conexão WhatsApp
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'connect_whatsapp' }));
+    }
   }
 }
 

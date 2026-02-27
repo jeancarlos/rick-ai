@@ -240,6 +240,9 @@ export class WebConnector implements Connector {
             case "get_session_history":
               await this.handleGetSessionHistory(ws, msg.sessionId);
               break;
+            case "connect_whatsapp":
+              await this.handleConnectWhatsApp(ws);
+              break;
             case "disconnect_whatsapp":
               await this.handleDisconnectWhatsApp(ws);
               break;
@@ -704,6 +707,32 @@ export class WebConnector implements Connector {
     }
 
     this.notifyEditMode(false);
+  }
+
+  private async handleConnectWhatsApp(ws: WebSocket): Promise<void> {
+    if (!this.whatsappConnector) {
+      this.send(ws, { type: "error", text: "Conector WhatsApp indisponivel." });
+      return;
+    }
+
+    if (this.whatsappConnector.isConnected()) {
+      // Já conectado — apenas sincroniza o status com o cliente
+      this.broadcastToAuthenticated({ type: "status", whatsapp: true });
+      return;
+    }
+
+    if (this.whatsappConnector.isStarting()) {
+      // Socket já foi criado e está aguardando QR — nada a fazer
+      return;
+    }
+
+    // Conector completamente parado (ex.: após logout) — inicia novamente
+    try {
+      await this.whatsappConnector.start();
+    } catch (err) {
+      logger.error({ err }, "Failed to start WhatsApp from web UI");
+      this.send(ws, { type: "error", text: "Falha ao iniciar WhatsApp." });
+    }
   }
 
   private async handleDisconnectWhatsApp(ws: WebSocket): Promise<void> {
