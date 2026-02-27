@@ -812,15 +812,10 @@
     margin-bottom: 8px;
   }
 
-  .qr-overlay pre {
-    font-family: monospace;
-    font-size: 0.5rem;
-    line-height: 0.6rem;
-    color: var(--text);
-    background: #000;
-    padding: 8px;
+  .qr-overlay img {
+    display: block;
     border-radius: 8px;
-    overflow-x: auto;
+    background: #fff;
   }
 
   /* Input area */
@@ -2134,7 +2129,7 @@
         </div>
         <div class="qr-overlay" id="qr-overlay" style="margin-top:12px;">
           <div class="qr-title">Escaneie o QR code no WhatsApp:</div>
-          <pre id="qr-content"></pre>
+          <img id="qr-content" alt="QR Code WhatsApp" style="display:block;width:220px;height:220px;border-radius:8px;" />
         </div>
         <p class="settings-hint" style="margin-top:8px;">O status do WhatsApp é atualizado automaticamente.</p>
         <div class="settings-btn-row">
@@ -3357,20 +3352,14 @@ function showTyping(composing) {
 var pendingQrData = null;
 
 function showQrCode(data) {
-  // Only show toast on the first QR code received — not on subsequent rotations.
-  var isFirstQr = !pendingQrData;
   pendingQrData = data;
   var content = document.getElementById('qr-content');
-  if (content) content.textContent = data;
+  if (content) content.src = data;
 
   // Exibe o overlay do QR automaticamente assim que o código chegar,
   // sem exigir que o usuário clique em "Conectar" uma segunda vez.
   var qrOverlay = document.getElementById('qr-overlay');
   if (qrOverlay) qrOverlay.classList.add('visible');
-
-  if (isFirstQr) {
-    showToast('QR code do WhatsApp pronto! Escaneie para conectar.');
-  }
 }
 
 function isAtBottom() {

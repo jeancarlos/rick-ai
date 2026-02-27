@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage } from "node:http";
+import QRCode from "qrcode";
 import type { Connector, ConnectorCapabilities, IncomingMessage as AgentIncomingMessage, SendMessageOptions } from "./types.js";
 import type { ConnectorManager } from "./connector-manager.js";
 import type { WhatsAppConnector } from "./whatsapp.js";
@@ -97,7 +98,14 @@ export class WebConnector implements Connector {
   setWhatsAppConnector(whatsapp: WhatsAppConnector): void {
     this.whatsappConnector = whatsapp;
     whatsapp.onQrCode((qr: string) => {
-      this.broadcastToAuthenticated({ type: "qr", data: qr });
+      QRCode.toDataURL(qr, { margin: 1, scale: 6 })
+        .then((dataUrl) => {
+          this.broadcastToAuthenticated({ type: "qr", data: dataUrl });
+        })
+        .catch(() => {
+          // Fallback: envia o texto cru se a geração da imagem falhar
+          this.broadcastToAuthenticated({ type: "qr", data: qr });
+        });
     });
     whatsapp.onConnectionChange((connected: boolean) => {
       this.broadcastToAuthenticated({ type: "status", whatsapp: connected });
