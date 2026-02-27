@@ -85,6 +85,20 @@ export class WhatsAppConnector implements Connector {
       return;
     }
 
+    // If creds exist but were from a revoked session (me set + registered false),
+    // clear them so Baileys generates a fresh QR instead of looping 401s.
+    try {
+      const credsPath = path.join(AUTH_DIR, "creds.json");
+      const raw = await fs.readFile(credsPath, "utf-8").catch(() => "");
+      if (raw) {
+        const creds = JSON.parse(raw);
+        if (creds.me && creds.registered === false) {
+          logger.warn("Stale creds detected (me set but not registered) — clearing auth_info for fresh QR.");
+          await fs.rm(AUTH_DIR, { recursive: true, force: true });
+        }
+      }
+    } catch {}
+
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
     // Busca a versão do WA Web apenas uma vez — reutiliza o cache nas reconexões
@@ -150,6 +164,10 @@ export class WhatsAppConnector implements Connector {
           logger.info({ attempt: this.reconnectAttempts, delay }, "Reconnecting...");
           setTimeout(() => this.start(), delay);
         } else if (!shouldReconnect) {
+          // Ensure the socket is fully dead before clearing auth — otherwise
+          // a pending saveCreds callback can re-write creds.json after rm.
+          try { sock.ev.removeAllListeners("creds.update"); } catch {}
+          try { sock.end(undefined); } catch {}
           logger.warn("Logged out — clearing stale auth_info so next connect generates a fresh QR.");
           await fs.rm(AUTH_DIR, { recursive: true, force: true }).catch(() => {});
         }
