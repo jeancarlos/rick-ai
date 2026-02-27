@@ -450,7 +450,7 @@ interface LatestVersionInfo {
 }
 
 function getProjectDir(): string {
-  return process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
+  return process.env.HOST_PROJECT_DIR || process.cwd();
 }
 
 function getVersionCachePath(): string {

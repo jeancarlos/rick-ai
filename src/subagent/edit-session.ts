@@ -348,7 +348,7 @@ export class EditSession {
       "Construindo agora (pode levar alguns minutos na primeira vez)..._"
     );
 
-    const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
+    const projectDir = process.env.HOST_PROJECT_DIR || process.cwd();
     await execFileAsync(
       "docker",
       [
@@ -373,7 +373,7 @@ export class EditSession {
   async start(env: Record<string, string>): Promise<void> {
     await this.ensureImageExists();
 
-    const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
+    const projectDir = process.env.HOST_PROJECT_DIR || process.cwd();
 
     // Create staging directory with copy of current source on the HOST.
     // We copy src/, package.json, tsconfig.json, package-lock.json from the host project,
@@ -872,7 +872,7 @@ export class EditSession {
     this.state = "deploying";
     await this.sendMessage("*Iniciando deploy seguro...*\nEtapas: build (inclui tsc) → smoke test → swap → watchdog");
 
-    const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
+    const projectDir = process.env.HOST_PROJECT_DIR || process.cwd();
 
     const child = spawn("docker", [
       "run", "--rm",
@@ -1060,7 +1060,7 @@ export class EditSession {
     await this.sendMessage(`\`[publish]\` Iniciando deploy + push...`, "tool_use");
     this.state = "deploying";
 
-    const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
+    const projectDir = process.env.HOST_PROJECT_DIR || process.cwd();
 
     // Write the push script to a temp file on the host, then mount it into the container.
     // This avoids shell injection from the token and keeps the script readable.
