@@ -54,15 +54,21 @@ fi
 
 # ==================== STEP 1: BACKUP ====================
 
-log "Step 1: Backing up current src/ to src.bak/"
-rm -rf "$BACKUP_DIR"
+log "Step 1: Backing up current src/ and scripts/ to src.bak/ and scripts.bak/"
+rm -rf "$BACKUP_DIR" "$PROJECT_DIR/scripts.bak"
 cp -r "$PROJECT_DIR/src" "$BACKUP_DIR"
+if [ -d "$PROJECT_DIR/scripts" ]; then
+  cp -r "$PROJECT_DIR/scripts" "$PROJECT_DIR/scripts.bak"
+fi
 log "Backup created at $BACKUP_DIR"
 
 # ==================== STEP 2: COPY STAGED FILES ====================
 
-log "Step 2: Copying staged files to src/"
+log "Step 2: Copying staged files to project dir"
 cp -r "$STAGING_DIR/src/"* "$PROJECT_DIR/src/"
+if [ -d "$STAGING_DIR/scripts" ]; then
+  cp -r "$STAGING_DIR/scripts/"* "$PROJECT_DIR/scripts/" 2>/dev/null || true
+fi
 log "Staged files applied"
 
 # ==================== STEP 3: BUILD CANDIDATE ====================
@@ -94,7 +100,11 @@ if ! docker build --build-arg "COMMIT_SHA=$COMMIT_SHA" --build-arg "COMMIT_DATE=
   err "Docker build failed (likely tsc errors)! Rolling back..."
   rm -rf "$PROJECT_DIR/src"
   cp -r "$BACKUP_DIR" "$PROJECT_DIR/src"
-  rm -rf "$BACKUP_DIR"
+  if [ -d "$PROJECT_DIR/scripts.bak" ]; then
+    rm -rf "$PROJECT_DIR/scripts"
+    cp -r "$PROJECT_DIR/scripts.bak" "$PROJECT_DIR/scripts"
+  fi
+  rm -rf "$BACKUP_DIR" "$PROJECT_DIR/scripts.bak"
   exit 1
 fi
 log "Candidate image built: $CANDIDATE_TAG"
@@ -140,7 +150,11 @@ if [ "$HEALTHY" != "true" ]; then
   err "Candidate failed health check! Rolling back..."
   rm -rf "$PROJECT_DIR/src"
   cp -r "$BACKUP_DIR" "$PROJECT_DIR/src"
-  rm -rf "$BACKUP_DIR"
+  if [ -d "$PROJECT_DIR/scripts.bak" ]; then
+    rm -rf "$PROJECT_DIR/scripts"
+    cp -r "$PROJECT_DIR/scripts.bak" "$PROJECT_DIR/scripts"
+  fi
+  rm -rf "$BACKUP_DIR" "$PROJECT_DIR/scripts.bak"
   # Clean up candidate image
   docker rmi "$CANDIDATE_TAG" 2>/dev/null || true
   exit 2
@@ -190,7 +204,11 @@ if [ "$WATCH_OK" != "true" ]; then
   err "Watchdog detected failure! Rolling back..."
   rm -rf "$PROJECT_DIR/src"
   cp -r "$BACKUP_DIR" "$PROJECT_DIR/src"
-  rm -rf "$BACKUP_DIR"
+  if [ -d "$PROJECT_DIR/scripts.bak" ]; then
+    rm -rf "$PROJECT_DIR/scripts"
+    cp -r "$PROJECT_DIR/scripts.bak" "$PROJECT_DIR/scripts"
+  fi
+  rm -rf "$BACKUP_DIR" "$PROJECT_DIR/scripts.bak"
 
   # Rebuild with old code
   cd "$PROJECT_DIR"
@@ -206,6 +224,6 @@ fi
 # ==================== SUCCESS ====================
 
 log "Deploy successful! Cleaning up backup..."
-rm -rf "$BACKUP_DIR"
+rm -rf "$BACKUP_DIR" "$PROJECT_DIR/scripts.bak"
 log "Done. Rick is running with the new code."
 exit 0

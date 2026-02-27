@@ -351,9 +351,11 @@ export class EditSession {
       [
         `mkdir -p ${this.stagingDir}`,
         `cp -r /source/src /source/package.json /source/tsconfig.json ${this.stagingDir}/`,
+        `cp -r /source/scripts ${this.stagingDir}/ 2>/dev/null || true`,
         `cp /source/package-lock.json ${this.stagingDir}/ 2>/dev/null || true`,
         `cp /source/*.md ${this.stagingDir}/ 2>/dev/null || true`,
         `cp /source/Dockerfile /source/docker-compose.yml ${this.stagingDir}/ 2>/dev/null || true`,
+        `cp -r /source/.github ${this.stagingDir}/ 2>/dev/null || true`,
         `cd ${this.stagingDir} && npm install --prefer-offline 2>/dev/null`,
         `chown -R 1001:1001 ${this.stagingDir}`,
       ].join(" && "),
