@@ -818,6 +818,20 @@
     background: #fff;
   }
 
+  /* Spinner inline do botão Conectar WhatsApp */
+  .connect-btn-spinner {
+    display: inline-block;
+    width: 13px;
+    height: 13px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    margin-right: 7px;
+    vertical-align: middle;
+    flex-shrink: 0;
+  }
+
   /* Input area */
   .compose-bar {
     display: flex;
@@ -3356,6 +3370,9 @@ function showQrCode(data) {
   var content = document.getElementById('qr-content');
   if (content) content.src = data;
 
+  // Remove o loading do botão assim que o QR chegar
+  setConnectBtnLoading(false);
+
   // Exibe o overlay do QR automaticamente assim que o código chegar,
   // sem exigir que o usuário clique em "Conectar" uma segunda vez.
   var qrOverlay = document.getElementById('qr-overlay');
@@ -4425,11 +4442,25 @@ function updateWhatsAppStatusBadge() {
     // Hide QR code and clear pending data when connected
     if (qrOverlay) qrOverlay.classList.remove('visible');
     pendingQrData = null;
+    setConnectBtnLoading(false);
   } else {
     badge.className = 'settings-status disconnected';
     badge.innerHTML = '<span class="status-dot red"></span>Desconectado';
     if (connectBtn) connectBtn.style.display = '';
     if (disconnectBtn) disconnectBtn.style.display = 'none';
+    setConnectBtnLoading(false);
+  }
+}
+
+function setConnectBtnLoading(loading) {
+  var btn = document.getElementById('connect-whatsapp-btn');
+  if (!btn) return;
+  if (loading) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="connect-btn-spinner"></span>Aguardando...';
+  } else {
+    btn.disabled = false;
+    btn.textContent = 'Conectar';
   }
 }
 
@@ -4437,11 +4468,11 @@ function connectWhatsApp() {
   var qrOverlay = document.getElementById('qr-overlay');
   if (!qrOverlay) return;
   if (pendingQrData) {
+    // QR code já recebido — exibe imediatamente sem loading
     qrOverlay.classList.add('visible');
   } else {
-    showToast('Aguardando QR code do servidor...');
-    // Solicita ao backend que inicie/retome a conexão WhatsApp
     if (ws && ws.readyState === WebSocket.OPEN) {
+      setConnectBtnLoading(true);
       ws.send(JSON.stringify({ type: 'connect_whatsapp' }));
     }
   }

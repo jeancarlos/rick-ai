@@ -60,6 +60,12 @@ export class WhatsAppConnector implements Connector {
   private static readonly MAX_POLL_MESSAGES = 100;
 
   /**
+   * Cache da versão do WhatsApp Web para evitar fetch de rede a cada reconexão.
+   * Preenchido na primeira chamada de start().
+   */
+  private static versionCache: [number, number, number] | null = null;
+
+  /**
    * Callback for QR code events — allows the web connector or other
    * consumers to receive QR codes for display.
    */
@@ -80,7 +86,13 @@ export class WhatsAppConnector implements Connector {
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-    const { version } = await fetchLatestBaileysVersion();
+
+    // Busca a versão do WA Web apenas uma vez — reutiliza o cache nas reconexões
+    if (!WhatsAppConnector.versionCache) {
+      const { version: v } = await fetchLatestBaileysVersion();
+      WhatsAppConnector.versionCache = v;
+    }
+    const version = WhatsAppConnector.versionCache;
 
     const pinoLogger = pino({ level: "silent" });
 
