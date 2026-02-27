@@ -2077,9 +2077,10 @@
           <div class="qr-title">Escaneie o QR code no WhatsApp:</div>
           <pre id="qr-content"></pre>
         </div>
-        <p class="settings-hint" style="margin-top:8px;">O status do WhatsApp é atualizado automaticamente. Quando desconectado, o QR code aparecerá aqui para conectar.</p>
+        <p class="settings-hint" style="margin-top:8px;">O status do WhatsApp é atualizado automaticamente.</p>
         <div class="settings-btn-row">
-          <button class="settings-action-btn danger" id="disconnect-whatsapp-btn" onclick="disconnectWhatsApp()">Desconectar WhatsApp</button>
+          <button class="settings-action-btn" id="connect-whatsapp-btn" onclick="connectWhatsApp()">Conectar</button>
+          <button class="settings-action-btn danger" id="disconnect-whatsapp-btn" onclick="disconnectWhatsApp()" style="display:none;">Desconectar WhatsApp</button>
         </div>
       </div>
     </div>
@@ -3266,15 +3267,17 @@ function showTyping(composing) {
 var pendingQrData = null;
 
 function showQrCode(data) {
-  // Just store the data and update the overlay content — do NOT make it visible
-  // automatically or expand the settings section. The QR code must only appear
-  // when the user explicitly opens Settings → Conectores.
+  // Only show toast on the first QR code received — not on subsequent rotations.
+  var isFirstQr = !pendingQrData;
   pendingQrData = data;
   var content = document.getElementById('qr-content');
   if (content) content.textContent = data;
 
-  // Notify the user with a subtle toast to check settings
-  showToast('QR code do WhatsApp disponível em Configurações → Conectores');
+  // If the QR overlay is already visible (user clicked "Conectar"), keep it
+  // updated silently. If this is the very first QR code, notify once.
+  if (isFirstQr) {
+    showToast('QR code do WhatsApp disponível em Configurações → Conectores');
+  }
 }
 
 function isAtBottom() {
@@ -3767,22 +3770,6 @@ function openSettings() {
   document.getElementById('settings-overlay').classList.add('visible');
   document.getElementById('settings-panel').classList.add('visible');
 
-  // If there is a pending QR code, show it and expand the Conectores section
-  // so the user finds it immediately after opening settings.
-  if (pendingQrData) {
-    var overlay = document.getElementById('qr-overlay');
-    if (overlay) overlay.classList.add('visible');
-    document.querySelectorAll('.settings-section-header').forEach(function(h) {
-      if (h.querySelector('h3') && h.querySelector('h3').textContent.trim() === 'Conectores') {
-        if (h.classList.contains('collapsed')) {
-          h.classList.remove('collapsed');
-          var body = h.nextElementSibling;
-          if (body) body.classList.remove('collapsed');
-        }
-      }
-    });
-  }
-
   // Request current settings
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'get_settings' }));
@@ -4214,19 +4201,32 @@ function submitOAuthInput() {
 
 function updateWhatsAppStatusBadge() {
   var badge = document.getElementById('whatsapp-status-badge');
+  var connectBtn = document.getElementById('connect-whatsapp-btn');
   var disconnectBtn = document.getElementById('disconnect-whatsapp-btn');
   var qrOverlay = document.getElementById('qr-overlay');
   if (whatsappConnected) {
     badge.className = 'settings-status connected';
     badge.innerHTML = '<span class="status-dot green"></span>Conectado';
-    if (disconnectBtn) disconnectBtn.disabled = false;
+    if (connectBtn) connectBtn.style.display = 'none';
+    if (disconnectBtn) disconnectBtn.style.display = '';
     // Hide QR code and clear pending data when connected
     if (qrOverlay) qrOverlay.classList.remove('visible');
     pendingQrData = null;
   } else {
     badge.className = 'settings-status disconnected';
     badge.innerHTML = '<span class="status-dot red"></span>Desconectado';
-    if (disconnectBtn) disconnectBtn.disabled = true;
+    if (connectBtn) connectBtn.style.display = '';
+    if (disconnectBtn) disconnectBtn.style.display = 'none';
+  }
+}
+
+function connectWhatsApp() {
+  var qrOverlay = document.getElementById('qr-overlay');
+  if (!qrOverlay) return;
+  if (pendingQrData) {
+    qrOverlay.classList.add('visible');
+  } else {
+    showToast('Aguardando QR code do servidor...');
   }
 }
 
