@@ -1144,9 +1144,7 @@ else
   TOP_FILES=$(echo "$CHANGED_FILES" | head -3 | while read -r f; do basename "$f"; done | paste -sd ', ')
 
   # Monta a mensagem conforme quantidade de arquivos
-  if [ "$FILE_COUNT" -eq 1 ]; then
-    COMMIT_TITLE="feat($AREA): atualiza $TOP_FILES"
-  elif [ "$FILE_COUNT" -le 4 ]; then
+  if [ "$FILE_COUNT" -le 4 ]; then
     COMMIT_TITLE="feat($AREA): atualiza $TOP_FILES"
   else
     COMMIT_TITLE="feat($AREA): atualiza $FILE_COUNT arquivos"

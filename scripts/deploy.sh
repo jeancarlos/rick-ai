@@ -1,12 +1,13 @@
 #!/bin/sh
 #
 # Safe deploy pipeline for Rick (rick-ai).
-# Called by edit-session.ts after Claude Code edits source code.
+# Called by edit-session.ts after Claude Code edits source code,
+# and by the OTA update/import detached containers in health.ts.
 #
 # Runs inside a docker:cli container (Alpine) with docker.sock mounted.
 #
 # Flow:
-#   1. Backup current project files (src/, scripts/, Dockerfile, etc.)
+#   1. Backup current project files (src/, scripts/, docker/, Dockerfile, etc.)
 #   2. Copy all edited files from staging area to project dir
 #   3. Build candidate image (includes tsc — if tsc fails, build fails)
 #   4. Start candidate container in HEALTH_ONLY mode (no WhatsApp conflict)
@@ -16,7 +17,8 @@
 #   8. If unhealthy at any point: rollback
 #
 # Usage: deploy.sh <staging_dir>
-#   staging_dir: directory containing the edited src/ files
+#   staging_dir: directory containing the edited src/ files (and optionally
+#                scripts/, docker/, Dockerfile, package.json, etc.)
 #
 # Exit codes:
 #   0 = success
@@ -57,14 +59,15 @@ fi
 do_rollback() {
   log "Restoring from backup..."
   # Restore directories
-  for d in src scripts .github; do
+  for d in src scripts docker .github; do
     if [ -d "$BACKUP_DIR/$d" ]; then
       rm -rf "$PROJECT_DIR/$d"
       cp -r "$BACKUP_DIR/$d" "$PROJECT_DIR/$d"
     fi
   done
   # Restore root files
-  for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json; do
+  for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json \
+            .gitignore .env.example LICENSE .rick-version deploy-db.sh setup-oracle.sh; do
     if [ -f "$BACKUP_DIR/$f" ]; then
       cp "$BACKUP_DIR/$f" "$PROJECT_DIR/$f"
     fi
@@ -81,13 +84,14 @@ log "Step 1: Backing up project files"
 rm -rf "$BACKUP_DIR"
 mkdir -p "$BACKUP_DIR"
 # Backup directories
-for d in src scripts .github; do
+for d in src scripts docker .github; do
   if [ -d "$PROJECT_DIR/$d" ]; then
     cp -r "$PROJECT_DIR/$d" "$BACKUP_DIR/$d"
   fi
 done
 # Backup root-level files
-for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json; do
+for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json \
+          .gitignore .env.example LICENSE .rick-version deploy-db.sh setup-oracle.sh; do
   if [ -f "$PROJECT_DIR/$f" ]; then
     cp "$PROJECT_DIR/$f" "$BACKUP_DIR/$f"
   fi
@@ -100,12 +104,25 @@ log "Backup created at $BACKUP_DIR"
 # ==================== STEP 2: COPY STAGED FILES ====================
 
 log "Step 2: Copying staged files to project dir"
-cp -r "$STAGING_DIR/src/"* "$PROJECT_DIR/src/"
+
+# Clear and replace directories to avoid stale files from deleted sources.
+# Using rm -rf + cp -r instead of cp -r src/* prevents deleted files from
+# persisting across deploys.
+rm -rf "$PROJECT_DIR/src" && cp -r "$STAGING_DIR/src" "$PROJECT_DIR/src"
+
 if [ -d "$STAGING_DIR/scripts" ]; then
-  cp -r "$STAGING_DIR/scripts/"* "$PROJECT_DIR/scripts/" 2>/dev/null || true
+  rm -rf "$PROJECT_DIR/scripts" && cp -r "$STAGING_DIR/scripts" "$PROJECT_DIR/scripts"
 fi
+if [ -d "$STAGING_DIR/docker" ]; then
+  rm -rf "$PROJECT_DIR/docker" && cp -r "$STAGING_DIR/docker" "$PROJECT_DIR/docker"
+fi
+if [ -d "$STAGING_DIR/.github" ]; then
+  rm -rf "$PROJECT_DIR/.github" && cp -r "$STAGING_DIR/.github" "$PROJECT_DIR/.github"
+fi
+
 # Copy root-level config files that may have been edited in the staging dir
-for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json; do
+for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json \
+          .gitignore .env.example LICENSE .rick-version deploy-db.sh setup-oracle.sh; do
   if [ -f "$STAGING_DIR/$f" ]; then
     cp "$STAGING_DIR/$f" "$PROJECT_DIR/$f"
   fi
@@ -114,20 +131,25 @@ done
 for f in "$STAGING_DIR"/*.md; do
   [ -f "$f" ] && cp "$f" "$PROJECT_DIR/" || true
 done
-# Copy .github/ if present
-if [ -d "$STAGING_DIR/.github" ]; then
-  cp -r "$STAGING_DIR/.github" "$PROJECT_DIR/" 2>/dev/null || true
-fi
+
 log "Staged files applied"
 
 # ==================== STEP 3: BUILD CANDIDATE ====================
 
 # tsc runs as part of `npm run build` inside the Dockerfile.
 # If TypeScript has errors, the Docker build fails here.
-# Extract version info from git (if available) or from .rick-version file
+#
+# Version priority:
+#   1. STAGING_DIR/.rick-version — set by OTA update (has the real new SHA)
+#   2. git — for edit-session deploys where staging doesn't have .rick-version
+#   3. PROJECT_DIR/.rick-version — last resort
+#
 # Mark directory as safe — deploy runs as root inside docker:cli but files
 # belong to ubuntu, causing git "dubious ownership" errors.
-if command -v git >/dev/null 2>&1 && [ -d "$PROJECT_DIR/.git" ]; then
+if [ -f "$STAGING_DIR/.rick-version" ]; then
+  COMMIT_SHA=$(head -1 "$STAGING_DIR/.rick-version" 2>/dev/null || echo "unknown")
+  COMMIT_DATE=$(tail -1 "$STAGING_DIR/.rick-version" 2>/dev/null || echo "unknown")
+elif command -v git >/dev/null 2>&1 && [ -d "$PROJECT_DIR/.git" ]; then
   git config --global --add safe.directory "$PROJECT_DIR" 2>/dev/null || true
   COMMIT_SHA=$(cd "$PROJECT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
   COMMIT_DATE=$(cd "$PROJECT_DIR" && git log -1 --format='%cI' 2>/dev/null || echo "unknown")

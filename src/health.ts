@@ -1,5 +1,5 @@
 import { createServer, IncomingMessage, ServerResponse, Server } from "node:http";
-import { readFile, writeFile, mkdtemp, rm, readdir, stat, mkdir } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { logger } from "./config/logger.js";
@@ -641,129 +641,35 @@ async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<
     const rootDir = findRoot.trim().replace(/\/$/, "");
     const hostSourceRoot = `${hostExtractDir}/${rootDir}`;
 
-    // Write version stamp so deploy.sh / docker-compose can pick it up
+    // Write version stamp to staging so deploy.sh picks it up in Step 3
+    // (git on host still shows the OLD commit; .rick-version in staging is the
+    //  authoritative source for the new version).
     await pipeToDockerFile(
       Buffer.from(`${commitSha}\n${commitDate}\n`),
       `${hostSourceRoot}/.rick-version`,
     );
 
-    const deployLog: string[] = [];
-    deployLog.push(`[update] Downloaded from GitHub (${(zipBuffer.length / 1024 / 1024).toFixed(1)} MB)`);
-    deployLog.push(`[update] Version: ${commitSha} (${commitDate})`);
-    deployLog.push(`[update] Version source: ${versionSource}`);
-
-    // Backup all project files before overwriting
-    await backupProjectFiles(projectDir);
-    deployLog.push("[update] Backup criado");
-
-    // Copy new files from extracted archive
-    const copyScript = [
-      `set -e`,
-      `cd ${hostSourceRoot}`,
-      `for d in src docker scripts .github; do`,
-      `  if [ -d "$d" ]; then rm -rf ${projectDir}/$d && cp -r $d ${projectDir}/$d; fi`,
-      `done`,
-      `for f in Dockerfile docker-compose.yml package.json package-lock.json tsconfig.json .gitignore .env.example AGENTS.md CLAUDE.md GEMINI.md README.md LICENSE deploy-db.sh setup-oracle.sh .rick-version; do`,
-      `  if [ -f "$f" ]; then cp "$f" ${projectDir}/$f; fi`,
-      `done`,
-      `echo "done"`,
-    ].join("\n");
-
-    await execAsyncOutput("docker", [
-      "run", "--rm",
-      "-v", `${projectDir}:${projectDir}`,
-      "-v", "/tmp:/tmp",
-      "alpine:latest",
-      "sh", "-c", copyScript,
-    ]);
-    deployLog.push("[update] Files copied");
-
-    // Respond immediately BEFORE rebuilding.
-    // The rebuild restarts this container, so we can never send a response after.
-    // The client handles the disconnection and polls /health to confirm.
-    deployLog.push("[update] Starting build via external deployer...");
+    // Respond immediately BEFORE launching the deployer.
+    // deploy.sh restarts Rick (docker compose up -d), so no response can be sent after.
+    // The client polls /health to confirm Rick is back up.
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
       success: true,
       deploying: true,
       version: commitSha,
       versionSource,
-      log: deployLog.join("\n"),
-      message: "Arquivos copiados. Build iniciando — Rick vai reiniciar em breve.",
+      message: `Versao ${commitSha} baixada (${(zipBuffer.length / 1024 / 1024).toFixed(1)} MB). Deploy iniciando — Rick vai reiniciar em breve.`,
     }));
 
-    // Launch build+restart in a DETACHED docker:cli container.
-    // This container survives Rick's own restart (it runs independently on the host Docker).
-    // The script: build → smoke test → swap → watchdog → rollback on failure.
-    // Same safety guarantees as deploy.sh but triggered from OTA update.
+    // Launch deploy.sh in a DETACHED docker:cli container.
+    // This container survives Rick's restart and runs the full safe pipeline:
+    //   backup → copy → build → smoke test → swap → watchdog → rollback on failure.
     setImmediate(() => {
-      const rollbackShell = generateRollbackShell(projectDir);
-      const backupDir = `${projectDir}/.deploy-backup`;
       const deployScript = [
-        `set -e`,
-        `echo "[ota-deploy] Building candidate image..."`,
-        `cd ${projectDir}`,
-        `docker build --build-arg COMMIT_SHA=${commitSha} --build-arg COMMIT_DATE=${commitDate} -t rick-ai-agent:candidate -f Dockerfile . || {`,
-        `  echo "[ota-deploy] Build FAILED — rolling back"`,
-        rollbackShell,
-        `  rm -rf ${hostStaging}`,
-        `  exit 1`,
-        `}`,
-        ``,
-        `echo "[ota-deploy] Smoke testing candidate (HEALTH_ONLY)..."`,
-        `docker rm -f rick-ota-candidate 2>/dev/null || true`,
-        `docker run -d --name rick-ota-candidate --env-file ${projectDir}/.env -e HEALTH_ONLY=true -p 8081:80 rick-ai-agent:candidate`,
-        `HEALTHY=false`,
-        `for i in $(seq 1 20); do`,
-        `  sleep 3`,
-        `  RESP=$(wget -qO- http://localhost:8081/health 2>/dev/null || echo "")`,
-        `  if echo "$RESP" | grep -q '"status":"ok"'; then`,
-        `    HEALTHY=true`,
-        `    echo "[ota-deploy] Candidate healthy after attempt $i"`,
-        `    break`,
-        `  fi`,
-        `  echo "[ota-deploy] Health check $i/20: $RESP"`,
-        `done`,
-        `docker rm -f rick-ota-candidate 2>/dev/null || true`,
-        ``,
-        `if [ "$HEALTHY" != "true" ]; then`,
-        `  echo "[ota-deploy] Smoke test FAILED — rolling back"`,
-        rollbackShell,
-        `  rm -rf ${hostStaging}`,
-        `  docker rmi rick-ai-agent:candidate 2>/dev/null || true`,
-        `  exit 2`,
-        `fi`,
-        ``,
-        `echo "[ota-deploy] Swapping: promoting candidate..."`,
-        `docker tag rick-ai-agent:candidate rick-ai-agent:latest`,
-        `docker compose -f ${projectDir}/docker-compose.yml up -d`,
-        `docker rmi rick-ai-agent:candidate 2>/dev/null || true`,
-        ``,
-        `echo "[ota-deploy] Watchdog: monitoring for 60s..."`,
-        `WATCH_OK=true`,
-        `for i in $(seq 1 12); do`,
-        `  sleep 5`,
-        `  RESP=$(wget -qO- http://localhost:80/health 2>/dev/null || echo "")`,
-        `  if echo "$RESP" | grep -q '"status":"ok"'; then`,
-        `    echo "[ota-deploy] Watchdog $i/12: healthy"`,
-        `  else`,
-        `    echo "[ota-deploy] Watchdog $i/12 FAILED: $RESP"`,
-        `    WATCH_OK=false`,
-        `    break`,
-        `  fi`,
-        `done`,
-        ``,
-        `if [ "$WATCH_OK" != "true" ]; then`,
-        `  echo "[ota-deploy] Watchdog FAILED — rolling back!"`,
-        rollbackShell,
-        `  docker compose -f ${projectDir}/docker-compose.yml up -d --build`,
-        `  rm -rf ${hostStaging}`,
-        `  exit 3`,
-        `fi`,
-        ``,
-        `echo "[ota-deploy] Success! Cleaning up..."`,
-        `rm -rf ${backupDir} ${hostStaging}`,
-        `echo "[ota-deploy] Done."`,
+        `sh /deploy.sh "${hostSourceRoot}"`,
+        `STATUS=$?`,
+        `rm -rf "${hostStaging}"`,
+        `exit $STATUS`,
       ].join("\n");
 
       const proc = spawn("docker", [
@@ -772,14 +678,15 @@ async function handleUpdate(req: IncomingMessage, res: ServerResponse): Promise<
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
         "-v", `${projectDir}:${projectDir}`,
         "-v", "/tmp:/tmp",
+        "-v", `${projectDir}/scripts/deploy.sh:/deploy.sh:ro`,
+        "-e", `PROJECT_DIR=${projectDir}`,
         "--network", "host",
-        "-w", projectDir,
         "docker:cli",
         "sh", "-c", deployScript,
       ], { stdio: "ignore", detached: true });
 
       proc.unref();
-      logger.info("Update: OTA deployer container launched (detached)");
+      logger.info({ commitSha, hostSourceRoot }, "Update: OTA deployer launched (uses deploy.sh)");
     });
   } catch (err) {
     logger.error({ err }, "Update failed");
@@ -824,14 +731,6 @@ async function handleCodeExport(res: ServerResponse): Promise<void> {
     logger.info({ projectDir, paths: EXPORT_INCLUDES }, "Code export requested");
 
     // Create tar.gz from the HOST filesystem using a docker container.
-    // The container itself doesn't have the host project dir mounted,
-    // but it has docker.sock so we can run a helper container that does.
-    const tarArgs: string[] = [];
-    for (const item of EXPORT_INCLUDES) {
-      tarArgs.push("--exclude=node_modules");
-      tarArgs.push("--exclude=dist");
-    }
-
     const child = spawn("docker", [
       "run", "--rm",
       "-v", `${projectDir}:${projectDir}:ro`,
@@ -917,36 +816,21 @@ async function handleCodeImport(req: IncomingMessage, res: ServerResponse): Prom
       return;
     }
 
-    // Strategy:
-    // 1. Write archive to a HOST-accessible path using docker cp or piping through a container
-    // 2. Extract on host, validate, copy to project dir
-    // 3. docker compose up -d --build
-    //
-    // Since /tmp is NOT shared between container and host, we use docker to
-    // write data to the host filesystem. We pipe the archive via stdin to an
-    // alpine container that has the host project dir mounted.
-
-    const deployLog: string[] = [];
     const hostStaging = `/tmp/rick-import-${Date.now()}`;
+    const archiveName = isZip ? "import.zip" : "import.tar.gz";
+    const hostArchivePath = `${hostStaging}/${archiveName}`;
+    const hostExtractDir = `${hostStaging}/extracted`;
 
-    // Step 1: Create staging dir on host and write archive there
-    deployLog.push("[import] Criando staging dir no host...");
+    // Create staging dir and write archive to the HOST filesystem
     await execAsyncOutput("docker", [
       "run", "--rm",
       "-v", "/tmp:/tmp",
       "alpine:latest",
       "mkdir", "-p", hostStaging,
     ]);
-
-    // Write archive to host via stdin pipe to a docker container
-    const archiveName = isZip ? "import.zip" : "import.tar.gz";
-    const hostArchivePath = `${hostStaging}/${archiveName}`;
-    const hostExtractDir = `${hostStaging}/extracted`;
-
     await pipeToDockerFile(body, hostArchivePath);
-    deployLog.push(`[import] Arquivo salvo no host (${sizeMB} MB)`);
 
-    // Step 2: Extract and validate on host
+    // Extract archive
     const extractScript = isGzip
       ? `mkdir -p ${hostExtractDir} && tar xzf ${hostArchivePath} -C ${hostExtractDir}`
       : `mkdir -p ${hostExtractDir} && cd ${hostExtractDir} && unzip -o ${hostArchivePath}`;
@@ -975,18 +859,16 @@ async function handleCodeImport(req: IncomingMessage, res: ServerResponse): Prom
         throw new Error("Falha ao extrair tar.gz");
       }
     }
-    deployLog.push("[import] Arquivo extraido");
 
     // Validate: check if src/ exists (might be nested in a single directory)
     const validateScript = [
       `cd ${hostExtractDir}`,
-      // If single dir containing src/, use it as root
       `items=$(ls -1)`,
       `count=$(echo "$items" | wc -l)`,
       `if [ "$count" -eq 1 ] && [ -d "$items/src" ]; then`,
-      `  echo "$items"`,  // print the nested dir name
+      `  echo "$items"`,
       `elif [ -d "src" ]; then`,
-      `  echo "."`,       // root is extract dir itself
+      `  echo "."`,
       `else`,
       `  echo "INVALID" >&2`,
       `  exit 1`,
@@ -1009,109 +891,45 @@ async function handleCodeImport(req: IncomingMessage, res: ServerResponse): Prom
     }
 
     const hostSourceRoot = sourceSubdir === "." ? hostExtractDir : `${hostExtractDir}/${sourceSubdir}`;
-    deployLog.push(`[import] Source root: ${hostSourceRoot}`);
+    logger.info({ hostSourceRoot, sizeMB }, "Code import: archive validated, launching deploy");
 
-    // Step 3: Backup all project files on host and copy new files
-    await backupProjectFiles(projectDir);
-    deployLog.push("[import] Backup criado");
+    // Respond immediately BEFORE launching the deployer.
+    // deploy.sh restarts Rick (docker compose up -d), so no response can be sent after.
+    // The client polls /health to confirm Rick is back up.
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      success: true,
+      deploying: true,
+      message: `Arquivo recebido (${sizeMB} MB). Deploy iniciando — Rick vai reiniciar em breve.`,
+    }));
 
-    const copyScript = [
-      `set -e`,
-      `echo "[import] Copying files..."`,
-      `cd ${hostSourceRoot}`,
-      // Copy directories
-      `for d in src docker scripts .github; do`,
-      `  if [ -d "$d" ]; then`,
-      `    rm -rf ${projectDir}/$d`,
-      `    cp -r $d ${projectDir}/$d`,
-      `    echo "[import] Copied: $d/"`,
-      `  fi`,
-      `done`,
-      // Copy individual files
-      `for f in Dockerfile docker-compose.yml package.json package-lock.json tsconfig.json .gitignore .env.example AGENTS.md CLAUDE.md GEMINI.md README.md LICENSE .rick-version deploy-db.sh setup-oracle.sh; do`,
-      `  if [ -f "$f" ]; then`,
-      `    cp "$f" ${projectDir}/$f`,
-      `    echo "[import] Copied: $f"`,
-      `  fi`,
-      `done`,
-      `echo "[import] Done"`,
-    ].join("\n");
+    // Launch deploy.sh in a DETACHED docker:cli container.
+    // deploy.sh runs the full safe pipeline:
+    //   backup → copy → build (tsc) → smoke test → swap → watchdog → rollback on failure.
+    setImmediate(() => {
+      const deployScript = [
+        `sh /deploy.sh "${hostSourceRoot}"`,
+        `STATUS=$?`,
+        `rm -rf "${hostStaging}"`,
+        `exit $STATUS`,
+      ].join("\n");
 
-    try {
-      const copyOutput = await execAsyncOutput("docker", [
-        "run", "--rm",
-        "-v", `${projectDir}:${projectDir}`,
-        "-v", "/tmp:/tmp",
-        "alpine:latest",
-        "sh", "-c", copyScript,
-      ]);
-      deployLog.push(copyOutput.trim());
-    } catch (copyErr) {
-      await cleanupHostDir(hostStaging);
-      deployLog.push("[import] FAILED: " + (copyErr as Error).message);
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Falha ao copiar arquivos", log: deployLog.join("\n") }));
-      return;
-    }
-
-    // Step 4: Read version from .rick-version if present, then build
-    let importSha = "unknown";
-    let importDate = "unknown";
-    try {
-      const versionContent = await execAsyncOutput("docker", [
-        "run", "--rm", "-v", `${projectDir}:${projectDir}:ro`, "alpine:latest",
-        "cat", `${projectDir}/.rick-version`,
-      ]);
-      const lines = versionContent.trim().split("\n");
-      if (lines[0]) importSha = lines[0];
-      if (lines[1]) importDate = lines[1];
-    } catch { /* no .rick-version, keep defaults */ }
-
-    deployLog.push("[import] Building (tsc + Docker)...");
-
-    try {
-      const buildOutput = await execAsyncOutput("docker", [
-        "run", "--rm",
+      const proc = spawn("docker", [
+        "run", "-d", "--rm",
+        "--name", `rick-import-deployer-${Date.now()}`,
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
         "-v", `${projectDir}:${projectDir}`,
-        "-w", projectDir,
-        "-e", `RICK_COMMIT_SHA=${importSha}`,
-        "-e", `RICK_COMMIT_DATE=${importDate}`,
+        "-v", "/tmp:/tmp",
+        "-v", `${projectDir}/scripts/deploy.sh:/deploy.sh:ro`,
+        "-e", `PROJECT_DIR=${projectDir}`,
+        "--network", "host",
         "docker:cli",
-        "docker", "compose", "up", "-d", "--build",
-      ], undefined, 300000);  // 5 min timeout for build
-      const lastLines = buildOutput.trim().split("\n").slice(-8).join("\n");
-      deployLog.push(lastLines);
-      deployLog.push("[import] Deploy successful!");
+        "sh", "-c", deployScript,
+      ], { stdio: "ignore", detached: true });
 
-      // Clean up staging and backup on host
-      await cleanupHostDir(hostStaging);
-      await cleanupHostDir(`${projectDir}/.deploy-backup`);
-
-      // Send response before this container gets replaced
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ success: true, log: deployLog.join("\n") }));
-    } catch (buildErr) {
-      // Build failed — rollback
-      deployLog.push("[import] Build FAILED: " + (buildErr as Error).message);
-      deployLog.push("[import] Rolling back...");
-
-      try {
-        await rollbackProjectFiles(projectDir);
-        deployLog.push("[import] Rollback complete");
-      } catch (rbErr) {
-        deployLog.push("[import] Rollback FAILED: " + (rbErr as Error).message);
-      }
-
-      await cleanupHostDir(hostStaging);
-      logger.error({ err: buildErr }, "Code import: build failed, rolled back");
-
-      res.writeHead(422, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        error: "Build falhou (rollback automatico aplicado)",
-        log: deployLog.join("\n"),
-      }));
-    }
+      proc.unref();
+      logger.info({ hostSourceRoot }, "Import: deployer container launched (uses deploy.sh)");
+    });
   } catch (err) {
     logger.error({ err }, "Code import failed");
     if (!res.headersSent) {
@@ -1142,97 +960,11 @@ async function pipeToDockerFile(data: Buffer, hostPath: string): Promise<void> {
   });
 }
 
-/** Clean up a directory on the HOST filesystem */
-/**
- * Directories and files to backup/rollback in import, update, and deploy flows.
- * Keep in sync with EXPORT_INCLUDES and deploy.sh's do_rollback().
- */
-const BACKUP_DIRS = ["src", "scripts", "docker", ".github"];
-const BACKUP_FILES = [
-  "Dockerfile", "docker-compose.yml", "package.json", "package-lock.json",
-  "tsconfig.json", ".gitignore", ".env.example",
-  "AGENTS.md", "CLAUDE.md", "GEMINI.md", "README.md", "LICENSE",
-  "deploy-db.sh", "setup-oracle.sh", ".rick-version",
-];
-
-/**
- * Backup all project files to a .deploy-backup dir on the host.
- * Runs via docker container with host filesystem mounted.
- */
-async function backupProjectFiles(projectDir: string): Promise<string> {
-  const backupDir = `${projectDir}/.deploy-backup`;
-  const script = [
-    `set -e`,
-    `rm -rf ${backupDir}`,
-    `mkdir -p ${backupDir}`,
-    // Backup directories
-    ...BACKUP_DIRS.map(d =>
-      `[ -d "${projectDir}/${d}" ] && cp -r "${projectDir}/${d}" "${backupDir}/${d}" || true`
-    ),
-    // Backup files
-    ...BACKUP_FILES.map(f =>
-      `[ -f "${projectDir}/${f}" ] && cp "${projectDir}/${f}" "${backupDir}/${f}" || true`
-    ),
-  ].join("\n");
-
-  await execAsyncOutput("docker", [
-    "run", "--rm",
-    "-v", `${projectDir}:${projectDir}`,
-    "alpine:latest",
-    "sh", "-c", script,
-  ]);
-  return backupDir;
-}
-
-/**
- * Rollback project files from .deploy-backup dir on the host.
- * Restores all directories and files, then cleans up the backup.
- */
-async function rollbackProjectFiles(projectDir: string): Promise<void> {
-  const backupDir = `${projectDir}/.deploy-backup`;
-  const script = [
-    `set -e`,
-    // Restore directories
-    ...BACKUP_DIRS.map(d =>
-      `[ -d "${backupDir}/${d}" ] && rm -rf "${projectDir}/${d}" && cp -r "${backupDir}/${d}" "${projectDir}/${d}" || true`
-    ),
-    // Restore files
-    ...BACKUP_FILES.map(f =>
-      `[ -f "${backupDir}/${f}" ] && cp "${backupDir}/${f}" "${projectDir}/${f}" || true`
-    ),
-    `rm -rf ${backupDir}`,
-  ].join("\n");
-
-  await execAsyncOutput("docker", [
-    "run", "--rm",
-    "-v", `${projectDir}:${projectDir}`,
-    "alpine:latest",
-    "sh", "-c", script,
-  ]);
-}
-
-/**
- * Generate a shell script snippet that performs a full project rollback.
- * Used in inline deploy scripts (OTA deployer) that run inside docker:cli containers.
- */
-function generateRollbackShell(projectDir: string): string {
-  const backupDir = `${projectDir}/.deploy-backup`;
-  const lines: string[] = [];
-  for (const d of BACKUP_DIRS) {
-    lines.push(`[ -d "${backupDir}/${d}" ] && rm -rf "${projectDir}/${d}" && cp -r "${backupDir}/${d}" "${projectDir}/${d}" || true`);
-  }
-  for (const f of BACKUP_FILES) {
-    lines.push(`[ -f "${backupDir}/${f}" ] && cp "${backupDir}/${f}" "${projectDir}/${f}" || true`);
-  }
-  lines.push(`rm -rf "${backupDir}"`);
-  return lines.join("\n");
-}
-
+/** Clean up a directory on the HOST filesystem (path must be under /tmp). */
 async function cleanupHostDir(hostPath: string): Promise<void> {
   await execAsyncOutput("docker", [
     "run", "--rm",
     "-v", "/tmp:/tmp",
-    "-v", `${hostPath}:${hostPath}`,
     "alpine:latest",
     "rm", "-rf", hostPath,
   ]).catch(() => {});
@@ -1252,19 +984,6 @@ async function getOwnContainerName(): Promise<string | null> {
 }
 
 // ==================== EXEC HELPERS ====================
-
-function execAsync(cmd: string, args: string[], opts?: { cwd?: string }): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd: opts?.cwd });
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${cmd} failed (exit ${code}): ${stderr.slice(-500)}`));
-    });
-    child.on("error", reject);
-  });
-}
 
 function execAsyncOutput(cmd: string, args: string[], opts?: { cwd?: string }, timeoutMs?: number): Promise<string> {
   return new Promise((resolve, reject) => {
