@@ -39,12 +39,13 @@ async function writePromptToContainer(
 export type AuthExpiredCallback = () => Promise<boolean>;
 /** Called before each Claude invocation to get a fresh token. Returns {accessToken, refreshToken?} or null. */
 export type GetFreshTokenCallback = () => Promise<{ accessToken: string; refreshToken?: string } | null>;
-/** Called when Claude hits rate limit in edit mode. Should use GPT Codex to complete the task. */
-export type GptFallbackCallback = (prompt: string) => Promise<string>;
 /** Called to persist assistant messages in the conversation history with their type. */
 export type SaveHistoryFn = (text: string, type: "text" | "tool_use") => Promise<void>;
 /** Called when the edit session closes (deploy success or /exit) so the caller can clean up references. */
 export type OnCloseCallback = () => void;
+
+/** Active LLM provider for this edit session (determines which credentials are injected). */
+export type EditProvider = "claude" | "openai" | "gemini";
 
 /** Internal callback type for sending messages (derived from ConnectorManager). */
 type SendFn = (text: string, messageType?: "text" | "tool_use") => Promise<void>;
@@ -206,15 +207,14 @@ export class EditSession {
   private setTyping: TypingFn | null;
   private onAuthExpired: AuthExpiredCallback | null;
   private getFreshToken: GetFreshTokenCallback | null;
-  private gptFallback: GptFallbackCallback | null;
   private saveHistory: SaveHistoryFn | null;
   private onClose: OnCloseCallback | null;
   private memoryService: MemoryService | null;
   private typingInterval: ReturnType<typeof setInterval> | null = null;
   /** The last prompt that failed due to auth — retried only if no output was produced */
   private lastFailedPrompt: { text: string; medias?: MediaAttachment[]; isContinue: boolean; hadOutput: boolean } | null = null;
-  /** When true, routes all prompts directly to GPT fallback (Claude not available) */
-  private gptOnly: boolean = false;
+  /** Active LLM provider for this session (determines welcome message and credential injection). */
+  private activeProvider: EditProvider = "claude";
 
   constructor(
     connectorManager: ConnectorManager,
@@ -222,11 +222,10 @@ export class EditSession {
     userId: string,
     onAuthExpired?: AuthExpiredCallback,
     getFreshToken?: GetFreshTokenCallback,
-    gptFallback?: GptFallbackCallback,
     saveHistory?: SaveHistoryFn,
     onClose?: OnCloseCallback,
     memoryService?: MemoryService,
-    gptOnly?: boolean,
+    activeProvider?: EditProvider,
   ) {
     this.id = randomBytes(8).toString("hex");
     this.containerName = `edit-session-${this.id}`;
@@ -246,11 +245,10 @@ export class EditSession {
 
     this.onAuthExpired = onAuthExpired ?? null;
     this.getFreshToken = getFreshToken ?? null;
-    this.gptFallback = gptFallback ?? null;
     this.saveHistory = saveHistory ?? null;
     this.onClose = onClose ?? null;
     this.memoryService = memoryService ?? null;
-    this.gptOnly = gptOnly ?? false;
+    this.activeProvider = activeProvider ?? "claude";
   }
 
   /**
@@ -332,11 +330,49 @@ export class EditSession {
   }
 
   /**
+   * Build the subagent-edit image if it is not present on this host.
+   * Runs `docker build` from the project directory using docker/subagent-edit.Dockerfile.
+   * Takes a few minutes on first run; subsequent starts are instant.
+   */
+  private async ensureImageExists(): Promise<void> {
+    try {
+      await execFileAsync("docker", ["image", "inspect", "subagent-edit"], { timeout: 10_000 });
+      return; // Image already exists
+    } catch {
+      // Image not found — build it
+    }
+
+    logger.info({}, "subagent-edit image not found — building from docker/subagent-edit.Dockerfile");
+    await this.sendMessage(
+      "_Imagem do agente de edição não encontrada localmente. " +
+      "Construindo agora (pode levar alguns minutos na primeira vez)..._"
+    );
+
+    const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
+    await execFileAsync(
+      "docker",
+      [
+        "build",
+        "-t", "subagent-edit",
+        "-f", `${projectDir}/docker/subagent-edit.Dockerfile`,
+        projectDir,
+      ],
+      { timeout: 600_000 } // 10 minutes max for first build
+    );
+
+    logger.info({}, "subagent-edit image built successfully");
+    await this.sendMessage("_Imagem construída com sucesso! Iniciando sessão..._");
+  }
+
+  /**
    * Start the edit session:
-   * 1. Create staging dir with copy of src/
-   * 2. Spin up Claude Code container with staging dir mounted
+   * 1. Build subagent-edit image if not present
+   * 2. Create staging dir with copy of src/
+   * 3. Spin up subagent-edit container with staging dir mounted
    */
   async start(env: Record<string, string>): Promise<void> {
+    await this.ensureImageExists();
+
     const projectDir = process.env.HOST_PROJECT_DIR || "/home/ubuntu/rick-ai";
 
     // Create staging directory with copy of current source on the HOST.
@@ -389,7 +425,7 @@ export class EditSession {
       "-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
       "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
       "-v", `${this.stagingDir}:/workspace`,
-      "subagent-claude",
+      "subagent-edit",
       "sleep", "7200", // 2 hours for edit sessions
     ]);
 
@@ -418,22 +454,23 @@ export class EditSession {
       "Edit session container started"
     );
 
-    const welcomeMsg = this.gptOnly
-      ? `*Modo de edicao ativado (GPT)*\n\n` +
-        `Claude nao esta conectado — usando GPT como assistente de codigo.\n` +
-        `O GPT pode sugerir alteracoes, mas nao edita arquivos diretamente.\n` +
-        `Para editar arquivos com autonomia total, conecte o Claude: */conectar claude*\n\n` +
-        `Comandos:\n` +
-        `- */deploy* — aplica as mudancas (com verificacao de seguranca)\n` +
-        `- */publish* — deploy + push para o GitHub\n` +
-        `- */exit* — descarta tudo e sai do modo de edicao`
-      : `*Modo de edicao ativado!*\n\n` +
-        `O Claude Code tem acesso ao codigo-fonte do Rick.\n` +
-        `Mande suas instrucoes diretamente — tudo vai pro Claude Code.\n\n` +
-        `Comandos:\n` +
-        `- */deploy* — aplica as mudancas (com verificacao de seguranca)\n` +
-        `- */publish* — deploy + push para o GitHub\n` +
-        `- */exit* — descarta tudo e sai do modo de edicao`;
+    const providerLabel =
+      this.activeProvider === "claude"
+        ? "Claude Code"
+        : this.activeProvider === "openai"
+        ? "GPT-4o"
+        : "Gemini Pro";
+
+    const welcomeMsg =
+      `*Modo de edicao ativado! (${providerLabel})*\n\n` +
+      (this.activeProvider === "claude"
+        ? `O Claude Code tem acesso completo ao codigo-fonte e edita arquivos de forma autonoma.`
+        : `Usando ${providerLabel} — edita arquivos diretamente via ferramentas de leitura/escrita.\n` +
+          `Para autonomia maxima, conecte o Claude: */conectar claude*`) +
+      `\n\nComandos:\n` +
+      `- */deploy* — aplica as mudancas (com verificacao de seguranca)\n` +
+      `- */publish* — deploy + push para o GitHub\n` +
+      `- */exit* — descarta tudo e sai do modo de edicao`;
 
     await this.sendMessage(welcomeMsg);
     await this.saveHistory?.(welcomeMsg, "text");
@@ -612,19 +649,14 @@ export class EditSession {
 
         const stderrText = stderrChunks.join("").trim();
 
-        // Rate limited — try GPT fallback if available
-        if (rateLimited && !authFailed && this.gptFallback) {
-          logger.warn({ sessionId: this.id, totalOutput }, "Edit session: Claude rate limited, trying GPT fallback");
-          await this.sendMessage("_Claude atingiu o limite. Redirecionando para GPT Codex..._");
-          try {
-            const lastPrompt = this.lastFailedPrompt?.text || "Continue the previous task";
-            const gptResult = await this.gptFallback(lastPrompt);
-            queue.push(gptResult);
-            await queue.drain();
-          } catch (err) {
-            logger.error({ err, sessionId: this.id }, "GPT fallback failed in edit session");
-            await this.sendMessage(`_Fallback GPT tambem falhou: ${(err as Error).message}_`);
-          }
+        // Rate limited — inform user and let them retry (the container's edit-agent.mjs
+        // handles provider fallback automatically on the next invocation when multiple
+        // provider credentials are available in the container environment)
+        if (rateLimited && !authFailed) {
+          logger.warn({ sessionId: this.id, totalOutput }, "Edit session: provider rate limited");
+          await this.sendMessage(
+            "_Limite de requisicoes atingido. Aguarde alguns instantes e tente novamente._"
+          );
           this.state = "ready";
           resolve();
           return;
@@ -688,37 +720,11 @@ export class EditSession {
   }
 
   /**
-   * Send a prompt directly to GPT (gptOnly mode).
-   * Used when Claude is not connected and GPT is the primary model.
-   */
-  private async sendViaGpt(prompt: string): Promise<void> {
-    if (!this.gptFallback) {
-      await this.sendMessage(
-        "_GPT nao disponivel. Conecte o GPT com */conectar gpt* ou o Claude com */conectar claude*._"
-      );
-      return;
-    }
-
-    this.state = "running";
-    this.startTyping();
-    try {
-      const result = await this.gptFallback(prompt);
-      await this.sendMessage(result);
-      await this.saveHistory?.(result, "text");
-    } catch (err) {
-      logger.error({ err, sessionId: this.id }, "GPT-only edit session: GPT call failed");
-      await this.sendMessage(`_GPT falhou: ${(err as Error).message}_`);
-    } finally {
-      this.stopTyping();
-      this.state = "ready";
-    }
-  }
-
-  /**
    * Proactively refresh the token inside the container before each Claude invocation.
    * This prevents 401s by ensuring credentials are always fresh.
    */
   private async ensureFreshToken(): Promise<void> {
+    if (this.activeProvider !== "claude") return;
     if (!this.getFreshToken || !this.containerId) return;
 
     try {
@@ -759,14 +765,8 @@ export class EditSession {
       return;
     }
 
-    // GPT-only mode: route directly to GPT, skip Claude Code entirely
-    if (this.gptOnly) {
-      await this.sendViaGpt(prompt);
-      return;
-    }
-
     this.state = "running";
-    await this.ensureFreshToken();
+    if (this.activeProvider === "claude") await this.ensureFreshToken();
     this.lastFailedPrompt = { text: prompt, medias, isContinue: false, hadOutput: false };
     const augmentedPrompt = await this.augmentPromptWithImages(prompt, medias);
     // Pass prompt as a direct argument — no shell escaping needed.
@@ -776,7 +776,7 @@ export class EditSession {
     // Claude CLI's arg parser from interpreting it as a flag (e.g. "---" → "unknown option").
     const safePrompt = augmentedPrompt.startsWith("-") ? `\n${augmentedPrompt}` : augmentedPrompt;
     await this.runClaude([
-      "claude", "-p", safePrompt,
+      "node", "/app/edit-agent.mjs", "-p", safePrompt,
       "--system-prompt", EDIT_SYSTEM_PROMPT,
       "--output-format", "stream-json",
       "--dangerously-skip-permissions",
@@ -798,20 +798,14 @@ export class EditSession {
       return;
     }
 
-    // GPT-only mode: route directly to GPT, skip Claude Code entirely
-    if (this.gptOnly) {
-      await this.sendViaGpt(prompt);
-      return;
-    }
-
     this.state = "running";
-    await this.ensureFreshToken();
+    if (this.activeProvider === "claude") await this.ensureFreshToken();
     this.lastFailedPrompt = { text: prompt, medias, isContinue: true, hadOutput: false };
     const augmentedPrompt = await this.augmentPromptWithImages(prompt, medias);
     // Same sanitization as sendPrompt
     const safePrompt = augmentedPrompt.startsWith("-") ? `\n${augmentedPrompt}` : augmentedPrompt;
     await this.runClaude([
-      "claude", "-p", safePrompt,
+      "node", "/app/edit-agent.mjs", "-p", safePrompt,
       "--continue",
       "--system-prompt", EDIT_SYSTEM_PROMPT,
       "--output-format", "stream-json",

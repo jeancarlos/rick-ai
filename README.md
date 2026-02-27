@@ -107,8 +107,8 @@ Each sub-agent gets a unique Rick variant name (Rick Prime, Pickle Rick, Evil Ri
 
 Rick can edit his own source code:
 
-1. `/edit` — Starts an edit session. Creates a staging copy of `src/`, launches a Claude Code container with the workspace mounted.
-2. Send prompts describing what to change — Claude Code edits the files directly.
+1. `/edit` — Starts an edit session. Creates a staging copy of `src/`, launches the `subagent-edit` container (auto-built on first run). Provider priority: **Claude Code → GPT-4o → Gemini Pro**, chosen automatically based on which credentials are available.
+2. Send prompts describing what to change — the active provider edits the files directly inside the isolated container.
 3. `/deploy` — Triggers the deploy pipeline:
    - Backup current `src/` → build candidate image → smoke test (health-only mode) → swap containers → 60s watchdog → rollback on failure
 4. `/publish [usuario/repo]` — Deploy + push code to GitHub. Defaults to `ruanbarroso/rick-ai`. Resolves GitHub token from Rick's memories, validates write access, runs the full deploy pipeline, then pushes. Push strategy: fast-forward → rebase → `--force-with-lease`.
@@ -242,7 +242,8 @@ rick-ai/
 │   ├── subagent/                      # Unified sub-agent (current)
 │   │   ├── Dockerfile                 # Chromium + Playwright + Node.js image
 │   │   └── agent.mjs                  # Autonomous agent script (LLM cascade + tools)
-│   ├── subagent-claude.Dockerfile     # Claude Code CLI image (used by /edit mode)
+│   ├── subagent-edit.Dockerfile       # Multi-provider edit image (Claude→GPT→Gemini, auto-built)
+│   └── edit-agent.mjs                 # Entry point: routes to Claude CLI / OpenAI / Gemini API
 │   └── subagent-research/             # Legacy research sub-agent
 │       ├── Dockerfile
 │       └── research.mjs
@@ -286,7 +287,7 @@ Host Docker (cluster-24g)
 │   └── agent.mjs + Playwright + Chromium
 │
 └── subagent-edit-*                # Ephemeral, created per /edit session
-    └── Claude Code CLI + Playwright MCP
+    └── edit-agent.mjs (Claude Code CLI / GPT-4o / Gemini Pro) + Playwright
 ```
 
 ## Environment Variables

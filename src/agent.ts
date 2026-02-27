@@ -7,7 +7,7 @@ import { VectorMemoryService } from "./memory/vector-memory-service.js";
 import { ClaudeOAuthService } from "./auth/claude-oauth.js";
 import { OpenAIOAuthService } from "./auth/openai-oauth.js";
 import { SessionManager, getSessionRickName } from "./subagent/session-manager.js";
-import { EditSession, AuthExpiredCallback, GetFreshTokenCallback, GptFallbackCallback, SaveHistoryFn } from "./subagent/edit-session.js";
+import { EditSession, AuthExpiredCallback, GetFreshTokenCallback, SaveHistoryFn } from "./subagent/edit-session.js";
 import { classifyTask } from "./subagent/classifier.js";
 import { PendingDelegation } from "./subagent/types.js";
 import type { ConnectorManager } from "./connectors/connector-manager.js";
@@ -1211,19 +1211,23 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
       return "Voce ja esta no modo de edicao. Use */exit* para sair ou */deploy* para aplicar.";
     }
 
-    // Claude OAuth is preferred for edit mode; fall back to GPT if not connected
+    // Provider priority: Claude → OpenAI → Gemini Pro
     const claudeToken = await this.claudeOAuth.getValidToken(userPhone);
-    let gptOnly = false;
+    let activeProvider: import("./subagent/edit-session.js").EditProvider = "claude";
     if (!claudeToken) {
       const gptToken = await this.openaiOAuth.getValidToken(userPhone);
-      if (!gptToken) {
+      if (gptToken) {
+        activeProvider = "openai";
+      } else if (config.gemini?.apiKey) {
+        activeProvider = "gemini";
+      } else {
         return (
-          "Nenhum modelo conectado para o modo de edicao.\n\n" +
-          "- */conectar claude* — recomendado (Claude Code com edicao autonoma de arquivos)\n" +
-          "- */conectar gpt* — alternativa (GPT como assistente de codigo)"
+          "Nenhum modelo disponivel para o modo de edicao.\n\n" +
+          "- */conectar claude* — recomendado (Claude Code com edicao autonoma)\n" +
+          "- */conectar gpt* — alternativa (GPT-4o com edicao de arquivos)\n" +
+          "- Gemini Pro e usado automaticamente quando configurado no servidor"
         );
       }
-      gptOnly = true;
     }
 
     // Auth expired callback: tries to refresh token, if fails sends OAuth link
@@ -1281,19 +1285,6 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
       return { accessToken: token, refreshToken };
     };
 
-    // GPT fallback for edit mode: calls Codex Responses API
-    const gptFallbackCb: GptFallbackCallback = async (prompt: string) => {
-      const gptToken = await this.openaiOAuth.getValidToken(userPhone);
-      if (!gptToken) {
-        throw new Error("GPT nao conectado. Use /conectar gpt.");
-      }
-      this.llm.setOpenAIOAuthToken(gptToken.accessToken, gptToken.accountId);
-      const result = await this.llm.chatWithProvider("openai", [
-        { role: "user", content: prompt },
-      ], "Voce e um assistente de programacao editando o codigo-fonte de um agente chamado Rick. Execute a tarefa solicitada.");
-      return result.content;
-    };
-
     // Persists assistant messages from Claude Code into session_messages table so they
     // survive F5 reloads. Uses this.editSession?.id (set before sendPrompt/sendContinue).
     // Note: must NOT go to the main conversations table — edit history is isolated.
@@ -1331,22 +1322,21 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
       userPhone,
       authExpiredCb,
       getFreshTokenCb,
-      gptFallbackCb,
       saveHistoryCb,
       onCloseCb,
       this.memory,
-      gptOnly,
+      activeProvider,
     );
 
-    // Build env for the container
+    // Build env for the container — inject provider credentials based on active provider
     const env: Record<string, string> = {};
-    env.GEMINI_API_KEY = config.gemini.apiKey;
 
-    // Only inject Claude credentials when Claude is available
-    if (!gptOnly && claudeToken) {
+    // Gemini is always available as last resort
+    if (config.gemini?.apiKey) env.GEMINI_API_KEY = config.gemini.apiKey;
+
+    if (activeProvider === "claude" && claudeToken) {
+      // Claude OAuth credentials
       env.CLAUDE_CODE_OAUTH_TOKEN = claudeToken;
-
-      // Get refresh token from DB
       try {
         const { query } = await import("./memory/db.js");
         const result = await query(
@@ -1357,7 +1347,17 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
           env.CLAUDE_REFRESH_TOKEN = result.rows[0].refresh_token;
         }
       } catch (_) { /* ignore */ }
+    } else if (activeProvider === "openai") {
+      // OpenAI credentials (OAuth token or API key)
+      const gptToken = await this.openaiOAuth.getValidToken(userPhone);
+      if (gptToken) {
+        env.OPENAI_ACCESS_TOKEN = gptToken.accessToken;
+        if (gptToken.accountId) env.OPENAI_ACCOUNT_ID = gptToken.accountId;
+      } else if (config.openai?.apiKey) {
+        env.OPENAI_API_KEY = config.openai.apiKey;
+      }
     }
+    // For "gemini" provider: GEMINI_API_KEY already set above
 
     // Set this.editSession BEFORE start() so that saveHistoryCb (which reads
     // this.editSession?.id) can persist the welcome message to session_messages.
