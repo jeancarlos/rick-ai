@@ -6,8 +6,8 @@
 # Runs inside a docker:cli container (Alpine) with docker.sock mounted.
 #
 # Flow:
-#   1. Backup current src/
-#   2. Copy edited src from staging area
+#   1. Backup current project files (src/, scripts/, Dockerfile, etc.)
+#   2. Copy all edited files from staging area to project dir
 #   3. Build candidate image (includes tsc — if tsc fails, build fails)
 #   4. Start candidate container in HEALTH_ONLY mode (no WhatsApp conflict)
 #   5. Health check candidate via wget
@@ -30,7 +30,7 @@ set -eu
 # PROJECT_DIR can be passed as env var from edit-session.ts, fallback to $HOME/rick-ai
 PROJECT_DIR="${PROJECT_DIR:-$HOME/rick-ai}"
 STAGING_DIR="${1:-}"
-BACKUP_DIR="$PROJECT_DIR/src.bak"
+BACKUP_DIR="$PROJECT_DIR/.deploy-backup"
 CANDIDATE_TAG="rick-ai-agent:candidate"
 CANDIDATE_NAME="rick-ai-candidate"
 HEALTH_PORT_CANDIDATE=8081
@@ -52,14 +52,49 @@ if [ ! -d "$STAGING_DIR/src" ]; then
   exit 1
 fi
 
+# ==================== HELPERS ====================
+
+do_rollback() {
+  log "Restoring from backup..."
+  # Restore directories
+  for d in src scripts .github; do
+    if [ -d "$BACKUP_DIR/$d" ]; then
+      rm -rf "$PROJECT_DIR/$d"
+      cp -r "$BACKUP_DIR/$d" "$PROJECT_DIR/$d"
+    fi
+  done
+  # Restore root files
+  for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json; do
+    if [ -f "$BACKUP_DIR/$f" ]; then
+      cp "$BACKUP_DIR/$f" "$PROJECT_DIR/$f"
+    fi
+  done
+  for f in "$BACKUP_DIR"/*.md; do
+    [ -f "$f" ] && cp "$f" "$PROJECT_DIR/" || true
+  done
+  rm -rf "$BACKUP_DIR"
+}
+
 # ==================== STEP 1: BACKUP ====================
 
-log "Step 1: Backing up current src/ and scripts/ to src.bak/ and scripts.bak/"
-rm -rf "$BACKUP_DIR" "$PROJECT_DIR/scripts.bak"
-cp -r "$PROJECT_DIR/src" "$BACKUP_DIR"
-if [ -d "$PROJECT_DIR/scripts" ]; then
-  cp -r "$PROJECT_DIR/scripts" "$PROJECT_DIR/scripts.bak"
-fi
+log "Step 1: Backing up project files"
+rm -rf "$BACKUP_DIR"
+mkdir -p "$BACKUP_DIR"
+# Backup directories
+for d in src scripts .github; do
+  if [ -d "$PROJECT_DIR/$d" ]; then
+    cp -r "$PROJECT_DIR/$d" "$BACKUP_DIR/$d"
+  fi
+done
+# Backup root-level files
+for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json; do
+  if [ -f "$PROJECT_DIR/$f" ]; then
+    cp "$PROJECT_DIR/$f" "$BACKUP_DIR/$f"
+  fi
+done
+for f in "$PROJECT_DIR"/*.md; do
+  [ -f "$f" ] && cp "$f" "$BACKUP_DIR/" || true
+done
 log "Backup created at $BACKUP_DIR"
 
 # ==================== STEP 2: COPY STAGED FILES ====================
@@ -68,6 +103,20 @@ log "Step 2: Copying staged files to project dir"
 cp -r "$STAGING_DIR/src/"* "$PROJECT_DIR/src/"
 if [ -d "$STAGING_DIR/scripts" ]; then
   cp -r "$STAGING_DIR/scripts/"* "$PROJECT_DIR/scripts/" 2>/dev/null || true
+fi
+# Copy root-level config files that may have been edited in the staging dir
+for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json; do
+  if [ -f "$STAGING_DIR/$f" ]; then
+    cp "$STAGING_DIR/$f" "$PROJECT_DIR/$f"
+  fi
+done
+# Copy markdown files (README.md, AGENTS.md, etc.)
+for f in "$STAGING_DIR"/*.md; do
+  [ -f "$f" ] && cp "$f" "$PROJECT_DIR/" || true
+done
+# Copy .github/ if present
+if [ -d "$STAGING_DIR/.github" ]; then
+  cp -r "$STAGING_DIR/.github" "$PROJECT_DIR/" 2>/dev/null || true
 fi
 log "Staged files applied"
 
@@ -98,13 +147,7 @@ printf '%s\n%s\n' "$COMMIT_SHA" "$COMMIT_DATE" > "$PROJECT_DIR/.rick-version"
 log "Step 3: Building candidate image (includes tsc check)..."
 if ! docker build --build-arg "COMMIT_SHA=$COMMIT_SHA" --build-arg "COMMIT_DATE=$COMMIT_DATE" -t "$CANDIDATE_TAG" -f "$PROJECT_DIR/Dockerfile" "$PROJECT_DIR" 2>&1; then
   err "Docker build failed (likely tsc errors)! Rolling back..."
-  rm -rf "$PROJECT_DIR/src"
-  cp -r "$BACKUP_DIR" "$PROJECT_DIR/src"
-  if [ -d "$PROJECT_DIR/scripts.bak" ]; then
-    rm -rf "$PROJECT_DIR/scripts"
-    cp -r "$PROJECT_DIR/scripts.bak" "$PROJECT_DIR/scripts"
-  fi
-  rm -rf "$BACKUP_DIR" "$PROJECT_DIR/scripts.bak"
+  do_rollback
   exit 1
 fi
 log "Candidate image built: $CANDIDATE_TAG"
@@ -148,13 +191,7 @@ docker rm -f "$CANDIDATE_NAME" 2>/dev/null || true
 
 if [ "$HEALTHY" != "true" ]; then
   err "Candidate failed health check! Rolling back..."
-  rm -rf "$PROJECT_DIR/src"
-  cp -r "$BACKUP_DIR" "$PROJECT_DIR/src"
-  if [ -d "$PROJECT_DIR/scripts.bak" ]; then
-    rm -rf "$PROJECT_DIR/scripts"
-    cp -r "$PROJECT_DIR/scripts.bak" "$PROJECT_DIR/scripts"
-  fi
-  rm -rf "$BACKUP_DIR" "$PROJECT_DIR/scripts.bak"
+  do_rollback
   # Clean up candidate image
   docker rmi "$CANDIDATE_TAG" 2>/dev/null || true
   exit 2
@@ -202,13 +239,7 @@ done
 
 if [ "$WATCH_OK" != "true" ]; then
   err "Watchdog detected failure! Rolling back..."
-  rm -rf "$PROJECT_DIR/src"
-  cp -r "$BACKUP_DIR" "$PROJECT_DIR/src"
-  if [ -d "$PROJECT_DIR/scripts.bak" ]; then
-    rm -rf "$PROJECT_DIR/scripts"
-    cp -r "$PROJECT_DIR/scripts.bak" "$PROJECT_DIR/scripts"
-  fi
-  rm -rf "$BACKUP_DIR" "$PROJECT_DIR/scripts.bak"
+  do_rollback
 
   # Rebuild with old code
   cd "$PROJECT_DIR"
@@ -224,6 +255,6 @@ fi
 # ==================== SUCCESS ====================
 
 log "Deploy successful! Cleaning up backup..."
-rm -rf "$BACKUP_DIR" "$PROJECT_DIR/scripts.bak"
+rm -rf "$BACKUP_DIR"
 log "Done. Rick is running with the new code."
 exit 0
