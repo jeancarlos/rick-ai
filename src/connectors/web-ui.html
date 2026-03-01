@@ -2891,9 +2891,20 @@ var agentName = 'Rick';
 var agentAvatar = DEFAULT_AVATAR;
 var AGENT_NAMES_SUFFIXES = ['Prime', 'Alpha', 'Beta', 'Gamma', 'Delta', 'Omega', 'Neo', 'Zero', 'Nova', 'Flux'];
 
-// Set avatars
-document.getElementById('login-avatar').src = DEFAULT_AVATAR;
-document.getElementById('sidebar-avatar').src = DEFAULT_AVATAR;
+// Restore cached identity for instant display on page load (before WebSocket auth)
+try {
+  var cachedName = localStorage.getItem('rick_agent_name');
+  var cachedLogo = localStorage.getItem('rick_agent_logo');
+  if (cachedName) agentName = cachedName;
+  if (cachedLogo && cachedLogo.length > 10) agentAvatar = cachedLogo;
+} catch(e) {}
+
+// Set initial UI with cached (or default) identity
+document.getElementById('login-avatar').src = agentAvatar;
+document.getElementById('login-title').textContent = agentName + ' AI';
+document.title = agentName + ' AI';
+document.getElementById('sidebar-avatar').src = agentAvatar;
+document.getElementById('sidebar-title').textContent = agentName + ' AI';
 
 var sidebarAvatarEl = document.getElementById('sidebar-avatar');
 sidebarAvatarEl.addEventListener('mouseenter', function() {
@@ -2999,7 +3010,7 @@ function doLogout() {
   authenticated = false;
   if (ws) { ws.close(); ws = null; }
   document.getElementById('app-screen').style.display = 'none';
-  document.getElementById('login-screen').style.display = 'block';
+  document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('password-input').value = '';
   document.getElementById('login-error').textContent = '';
   document.getElementById('password-input').focus();
@@ -3122,7 +3133,7 @@ function handleServerMessage(msg) {
     case 'auth_fail':
       try { localStorage.removeItem('rick_pwd'); } catch(e) {}
       password = '';
-      document.getElementById('login-screen').style.display = 'block';
+      document.getElementById('login-screen').style.display = 'flex';
       document.getElementById('app-screen').style.display = 'none';
       document.getElementById('login-error').textContent = msg.reason || 'Falha na autenticacao.';
       document.getElementById('login-btn').disabled = false;
@@ -5245,6 +5256,16 @@ function autoSaveGithubToken() {
 function applyAgentIdentity(name, logo) {
   agentName = name || 'Rick';
   agentAvatar = (logo && logo.length > 10) ? logo : DEFAULT_AVATAR;
+
+  // Cache in localStorage for instant display on page reload
+  try {
+    localStorage.setItem('rick_agent_name', agentName);
+    if (logo && logo.length > 10) {
+      localStorage.setItem('rick_agent_logo', logo);
+    } else {
+      localStorage.removeItem('rick_agent_logo');
+    }
+  } catch(e) {}
 
   // Update all UI elements
   document.title = agentName + ' AI';
