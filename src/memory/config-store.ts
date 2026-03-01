@@ -5,12 +5,11 @@ import { logger } from "../config/logger.js";
  * Config store backed by the database (SQLite or PostgreSQL).
  *
  * Stores dynamic configuration that can be changed at runtime via the Web UI.
- * These values are persisted across restarts and take precedence over defaults,
- * but .env / process.env values take precedence over the config store.
+ * These values are persisted across restarts and take precedence over .env.
  *
  * Priority (highest first):
- *   1. process.env (set in .env file or container env)
- *   2. config store (database)
+ *   1. config store (database) — values saved via Web UI Settings
+ *   2. process.env (set in .env file or container env)
  *   3. hardcoded defaults
  */
 
@@ -114,7 +113,15 @@ export const ENV_SKIP_KEYS = new Set(["AGENT_LOGO"]);
 
 /**
  * Load all config store values and merge with process.env defaults.
- * Returns a merged config object. process.env always takes precedence.
+ *
+ * Priority (highest first):
+ *   1. config store (DB) — values explicitly saved via Web UI Settings
+ *   2. process.env (.env file / container env)
+ *   3. hardcoded defaults
+ *
+ * The DB takes precedence because the admin explicitly chose that value
+ * in the UI. The .env file is only used as a fallback for initial setup
+ * or keys not yet configured via the UI.
  *
  * This is called at startup after database init to populate runtime config.
  */
@@ -124,29 +131,24 @@ export async function loadConfigFromStore(): Promise<Record<string, string>> {
     const merged: Record<string, string> = {};
 
     for (const [_uiKey, envKey] of Object.entries(SETTINGS_KEY_MAP)) {
-      // Priority: process.env (.env file) > config store (DB) > empty
-      // NOTE: If you change a setting via the Web UI, the config store value is
-      // saved to DB. But if the SAME key also exists in the .env file, the .env
-      // value will take precedence after a container restart. To fix: remove the
-      // key from .env so the DB value is used.
       const envVal = process.env[envKey];
       const storeVal = stored[envKey];
 
-      if (envVal) {
-        merged[envKey] = envVal;
-        // Warn if the .env value is overriding a different DB value
-        if (storeVal && storeVal !== envVal && !ENV_SKIP_KEYS.has(envKey)) {
-          logger.warn(
-            { key: envKey, envValue: envVal.substring(0, 30), storeValue: storeVal.substring(0, 30) },
-            "Config: .env overrides DB value — remove key from .env to use the DB-saved value"
-          );
-        }
-      } else if (storeVal) {
+      if (storeVal) {
+        // DB value wins — admin explicitly saved this via the UI
         merged[envKey] = storeVal;
-        // Inject into process.env so config reads pick it up (skip large values)
         if (!ENV_SKIP_KEYS.has(envKey)) {
           process.env[envKey] = storeVal;
         }
+        if (envVal && envVal !== storeVal) {
+          logger.warn(
+            { key: envKey },
+            "Config: DB value overrides .env — remove key from .env to avoid confusion"
+          );
+        }
+      } else if (envVal) {
+        // Fallback to .env when DB has no value
+        merged[envKey] = envVal;
       }
     }
 
