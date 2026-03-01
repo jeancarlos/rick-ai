@@ -2990,6 +2990,8 @@ var currentSettings = {};
 var pendingUserCount = 0;
 var usersData = [];
 var selectedUserId = null;
+var pendingUserConversations = null;
+var pendingUserSessions = null;
 var blockedSectionCollapsed = true;
 var avatarHovering = false;
 var avatarClickCount = 0;
@@ -3290,7 +3292,18 @@ function handleServerMessage(msg) {
       break;
 
     case 'user_detail':
-      if (msg.user) renderUserDetail(msg.user);
+      if (msg.user) {
+        renderUserDetail(msg.user);
+        // Apply any cached conversations/sessions that arrived before the detail was rendered
+        if (pendingUserConversations && pendingUserConversations.userId === msg.user.id) {
+          renderUserConversations(pendingUserConversations.userId, pendingUserConversations.messages);
+          pendingUserConversations = null;
+        }
+        if (pendingUserSessions && pendingUserSessions.userId === msg.user.id) {
+          renderUserSessions(pendingUserSessions.userId, pendingUserSessions.sessions);
+          pendingUserSessions = null;
+        }
+      }
       break;
 
     case 'user_updated':
@@ -3311,13 +3324,24 @@ function handleServerMessage(msg) {
 
     case 'user_conversations':
       if (msg.userId && msg.messages) {
-        renderUserConversations(msg.userId, msg.messages);
+        var convContainer = document.getElementById('user-conv-' + msg.userId);
+        if (convContainer) {
+          renderUserConversations(msg.userId, msg.messages);
+        } else {
+          // Detail not rendered yet — cache for when it arrives
+          pendingUserConversations = { userId: msg.userId, messages: msg.messages };
+        }
       }
       break;
 
     case 'user_sessions':
       if (msg.userId && msg.sessions) {
-        renderUserSessions(msg.userId, msg.sessions);
+        var sessContainer = document.getElementById('user-sessions-' + msg.userId);
+        if (sessContainer) {
+          renderUserSessions(msg.userId, msg.sessions);
+        } else {
+          pendingUserSessions = { userId: msg.userId, sessions: msg.sessions };
+        }
       }
       break;
 
