@@ -271,13 +271,13 @@ export class Agent {
     // Check for direct commands first (only for text messages)
     // handleCommand returns null if not a command, or a string (possibly empty) if it is
     if (!routingMedia) {
-      const commandResult = await this.handleCommand(userPhone, connectorName, fullText);
+      const commandResult = await this.handleCommand(userPhone, connectorName, fullText, numericUserId, userRole);
       if (commandResult !== null) return commandResult;
     }
 
     // If there's a pending delegation waiting for credentials, handle it
     if (this.pendingDelegation && !routingMedia) {
-      return this.handlePendingCredential(userPhone, connectorName, fullText);
+      return this.handlePendingCredential(userPhone, connectorName, fullText, numericUserId, userRole);
     }
 
     // Show typing indicator while processing (classification + LLM call can take several seconds)
@@ -300,7 +300,7 @@ export class Agent {
       // 2. Continuidade (adjust/fix on the same session)
       // 3. Novo pedido (different topic → nag to close first)
       if (this.sessionManager.hasDoneSessions()) {
-        return this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias, fileInfos);
+        return this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias, fileInfos, numericUserId);
       }
 
       // Classify the task — does it need a sub-agent?
@@ -472,7 +472,8 @@ export class Agent {
     let expandedHints = [...credentialHints];
     if (expandedHints.includes("email")) {
       expandedHints = expandedHints.filter((h) => h !== "email");
-      const allMemories = await this.memory.listMemories(userPhone);
+      // Use global memory list (memories are global in RBAC model)
+      const allMemories = await this.memory.listGlobalMemories();
       const emailCreds = allMemories.filter(
         (m) =>
           ["credenciais", "senhas", "contatos"].includes(m.category.toLowerCase()) &&
@@ -514,7 +515,11 @@ export class Agent {
       };
 
       const missingList = missing.map((m) => `*${m}*`).join(", ");
-      await this.memory.saveMessage(userPhone, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+      if (numericUserId) {
+        await this.memory.saveMessageByUserId(numericUserId, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+      } else {
+        await this.memory.saveMessage(userPhone, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+      }
       return `Vou precisar de credenciais para ${missingList} pra fazer isso.\n\nMe manda as credenciais de *${missing[0]}* (usuario, senha, token, o que for necessario).`;
     }
 
@@ -522,7 +527,11 @@ export class Agent {
       logger.info({ missing, resolved: Object.keys(resolved) }, "Proceeding with partial credentials");
     }
 
-    await this.memory.saveMessage(userPhone, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+    if (numericUserId) {
+      await this.memory.saveMessageByUserId(numericUserId, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+    } else {
+      await this.memory.saveMessage(userPhone, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+    }
 
     // Start the sub-agent container
     let session;
@@ -542,7 +551,11 @@ export class Agent {
 
     const ack = `O *${rickName}* vai cuidar disso pra voce, pode acompanhar aqui:\n${sessionUrl}`;
 
-    await this.memory.saveMessage(userPhone, "assistant", ack);
+    if (numericUserId) {
+      await this.memory.saveMessageByUserId(numericUserId, "assistant", ack);
+    } else {
+      await this.memory.saveMessage(userPhone, "assistant", ack);
+    }
 
     return ack;
   }
@@ -552,8 +565,8 @@ export class Agent {
    * Looks in categories: senhas, credenciais, tokens, contatos, general.
    */
   private async findCredentialInMemory(userPhone: string, service: string): Promise<string | null> {
-    // Search by key match in credential-related categories
-    const results = await this.memory.recall(userPhone, service);
+    // Search by key match in credential-related categories (global memories)
+    const results = await this.memory.recallGlobal(service);
 
     // Filter for credential-like categories
     const credCategories = ["senhas", "credenciais", "tokens", "passwords", "secrets", "contatos", "general"];
@@ -573,7 +586,7 @@ export class Agent {
     ];
 
     for (const variation of variations) {
-      const varResults = await this.memory.recall(userPhone, variation);
+      const varResults = await this.memory.recallGlobal(variation);
       if (varResults.length > 0) {
         // Collect all matches for this service
         const all = varResults
@@ -584,8 +597,8 @@ export class Agent {
       }
     }
 
-    // Search all memories in credential categories for a mention of the service
-    const allMemories = await this.memory.listMemories(userPhone);
+    // Search all global memories in credential categories for a mention of the service
+    const allMemories = await this.memory.listGlobalMemories();
     const serviceMatches = allMemories.filter(
       (m) =>
         credCategories.includes(m.category.toLowerCase()) &&
@@ -602,8 +615,7 @@ export class Agent {
     // not conversation snippets that merely mention the service name.
     if (this.vectorMemory) {
       try {
-        const vectorResults = await this.vectorMemory.search(
-          userPhone,
+        const vectorResults = await this.vectorMemory.searchGlobal(
           `credenciais ${service} senha usuario login`,
           5,
           0.5 // higher threshold for better precision
@@ -642,7 +654,9 @@ export class Agent {
   private async handlePendingCredential(
     userPhone: string,
     connectorName: string,
-    text: string
+    text: string,
+    numericUserId?: number,
+    userRole: UserRole = "admin"
   ): Promise<string> {
     const pending = this.pendingDelegation!;
 
@@ -656,8 +670,12 @@ export class Agent {
     // User is providing the credential for the first missing one
     const currentMissing = pending.missingCredentials[0];
 
-    // Save the credential to memory
-    await this.memory.remember(userPhone, currentMissing, text.trim(), "credenciais");
+    // Save the credential to memory (global in RBAC model)
+    if (numericUserId) {
+      await this.memory.rememberV2(currentMissing, text.trim(), "credenciais", numericUserId, userRole);
+    } else {
+      await this.memory.remember(userPhone, currentMissing, text.trim(), "credenciais");
+    }
     pending.resolvedCredentials[currentMissing] = text.trim();
     pending.missingCredentials.shift();
 
@@ -679,7 +697,12 @@ export class Agent {
       connectorName,
       pending.userMessage,
       [], // no more hints to resolve
-      pending.resolvedCredentials
+      pending.resolvedCredentials,
+      undefined, // audioUrl
+      undefined, // imageUrls
+      undefined, // imageMedias
+      undefined, // fileInfos
+      numericUserId
     );
   }
 
@@ -694,7 +717,8 @@ export class Agent {
     audioUrl?: string,
     imageUrls?: string[],
     imageMedias?: MediaAttachment[],
-    fileInfos?: Array<{ url: string; name: string; mimeType: string }>
+    fileInfos?: Array<{ url: string; name: string; mimeType: string }>,
+    numericUserId?: number
   ): Promise<string> {
     const doneSessions = this.sessionManager.getDoneSessions();
     if (doneSessions.length === 0) return "Nenhuma sessao pendente.";
@@ -760,7 +784,11 @@ export class Agent {
     }
 
     // CASE 2: Continuation — relay to the most recent done session
-    await this.memory.saveMessage(userPhone, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+    if (numericUserId) {
+      await this.memory.saveMessageByUserId(numericUserId, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+    } else {
+      await this.memory.saveMessage(userPhone, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos);
+    }
 
     this.sessionManager.sendToSession(mostRecent.id, text, imageMedias, audioUrl, imageUrls, fileInfos).catch(async (err) => {
       logger.error({ err }, "Sub-agent relay failed");
@@ -867,7 +895,9 @@ REGRA ANTI-ALUCINACAO (CRITICA — NUNCA viole):
   private async handleCommand(
     userPhone: string,
     connectorName: string,
-    text: string
+    text: string,
+    numericUserId?: number,
+    userRole: UserRole = "admin"
   ): Promise<string | null> {
     const lower = text.trim().toLowerCase();
 
@@ -917,7 +947,7 @@ REGRA ANTI-ALUCINACAO (CRITICA — NUNCA viole):
     // ==================== MEMORY COMMANDS ====================
 
     if (lower.startsWith("/lembrar ")) {
-      return this.cmdRemember(userPhone, text.slice(9).trim());
+      return this.cmdRemember(userPhone, text.slice(9).trim(), numericUserId, userRole);
     }
 
     if (lower.startsWith("/esquecer ")) {
@@ -925,7 +955,8 @@ REGRA ANTI-ALUCINACAO (CRITICA — NUNCA viole):
     }
 
     if (lower === "/esquecer_tudo") {
-      const count = await this.memory.forgetAll(userPhone);
+      // Use global forgetAll (memories are global in RBAC model)
+      const count = await this.memory.forgetAllGlobal();
       return `Pronto, esqueci ${count} memorias. Mente limpa!`;
     }
 
@@ -941,7 +972,11 @@ REGRA ANTI-ALUCINACAO (CRITICA — NUNCA viole):
     // ==================== CONVERSATION COMMANDS ====================
 
     if (lower === "/limpar") {
-      await this.memory.clearConversation(userPhone);
+      if (numericUserId) {
+        await this.memory.clearConversationByUserId(numericUserId);
+      } else {
+        await this.memory.clearConversation(userPhone);
+      }
       return "Historico de conversa limpo! Comecamos do zero.";
     }
 
@@ -978,7 +1013,7 @@ REGRA ANTI-ALUCINACAO (CRITICA — NUNCA viole):
     }
 
     if (lower === "/status") {
-      return this.cmdStatus(userPhone);
+      return this.cmdStatus(userPhone, numericUserId);
     }
 
     return null;
@@ -1140,7 +1175,7 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
 
   // ==================== MEMORY COMMANDS ====================
 
-  private async cmdRemember(userPhone: string, input: string): Promise<string> {
+  private async cmdRemember(userPhone: string, input: string, numericUserId?: number, userRole: UserRole = "admin"): Promise<string> {
     const eqIndex = input.indexOf("=");
     if (eqIndex === -1) {
       return 'Formato: /lembrar [categoria:]chave = valor\nExemplo: /lembrar senhas:gmail = minha_senha123';
@@ -1160,7 +1195,15 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
       return 'Formato: /lembrar [categoria:]chave = valor';
     }
 
-    await this.memory.remember(userPhone, keyPart, value, category);
+    // Use RBAC-aware rememberV2 if numericUserId is available
+    if (numericUserId) {
+      const result = await this.memory.rememberV2(keyPart, value, category, numericUserId, userRole);
+      if (result.blocked) {
+        return `Nao foi possivel salvar: a memoria *${keyPart}* foi criada por um admin e nao pode ser sobrescrita.`;
+      }
+    } else {
+      await this.memory.remember(userPhone, keyPart, value, category);
+    }
 
     const sensitiveCategories = ["senhas", "passwords", "secrets", "tokens"];
     const warning = sensitiveCategories.includes(category.toLowerCase())
@@ -1175,7 +1218,8 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
       return "Formato: /esquecer <chave>\nExemplo: /esquecer senha do gmail";
     }
 
-    const count = await this.memory.forget(userPhone, key);
+    // Use global forget (memories are global in RBAC model)
+    const count = await this.memory.forgetGlobal(key);
     if (count > 0) {
       return `Pronto, esqueci "${key}". (${count} item(s) removido(s))`;
     }
@@ -1183,7 +1227,8 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
   }
 
   private async cmdListMemories(userPhone: string, category?: string): Promise<string> {
-    const memories = await this.memory.listMemories(userPhone, category);
+    // Use global list (memories are global in RBAC model)
+    const memories = await this.memory.listGlobalMemories(category);
 
     if (memories.length === 0) {
       return category
@@ -1213,7 +1258,8 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
   private async cmdSearch(userPhone: string, term: string): Promise<string> {
     if (!term) return "Formato: /buscar <termo>";
 
-    const results = await this.memory.recall(userPhone, term);
+    // Use global recall (memories are global in RBAC model)
+    const results = await this.memory.recallGlobal(term);
     if (results.length === 0) return `Nenhum resultado para "${term}".`;
 
     let response = `*Resultados para "${term}":*\n`;
@@ -1224,10 +1270,11 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
   }
 
   private async cmdVectorSearch(userPhone: string, term: string): Promise<string> {
-    if (!term) return "Formato: /vbuscar <termo>\nBusca semantica nas suas memorias.";
+    if (!term) return "Formato: /vbuscar <termo>\nBusca semantica nas memorias.";
     if (!this.vectorMemory) return "Memoria semantica nao esta configurada.";
 
-    const results = await this.vectorMemory.search(userPhone, term, 10, 0.25);
+    // Use global vector search (memories are global in RBAC model)
+    const results = await this.vectorMemory.searchGlobal(term, 10, 0.25);
     if (results.length === 0) return `Nenhum resultado semantico para "${term}".`;
 
     let response = `*Busca semantica para "${term}":*\n`;
@@ -1536,21 +1583,23 @@ Chat: Gemini Flash | Codigo: Claude → GPT | Pesquisa: Gemini Pro
 "Lembra que meu email e x@y.com"`;
   }
 
-  private async cmdStatus(userPhone: string): Promise<string> {
-    const memories = await this.memory.listMemories(userPhone);
-    const history = await this.memory.getConversationHistory(userPhone);
+  private async cmdStatus(userPhone: string, numericUserId?: number): Promise<string> {
+    // Use global memory list (memories are global in RBAC model)
+    const memories = await this.memory.listGlobalMemories();
+    const history = numericUserId
+      ? await this.memory.getConversationHistoryByUserId(numericUserId)
+      : await this.memory.getConversationHistory(userPhone);
 
     let vectorInfo = "desativada";
     let diskInfo = "";
     if (this.vectorMemory) {
       try {
-        const count = await this.vectorMemory.count(userPhone);
         const totalCount = await this.vectorMemory.countAll();
         const dbSizeBytes = await this.vectorMemory.getDatabaseSizeBytes();
         const dbSizeMB = (dbSizeBytes / 1024 / 1024).toFixed(1);
         const maxGB = config.vectorDbMaxSizeGb;
         const usagePercent = ((dbSizeBytes / (maxGB * 1024 * 1024 * 1024)) * 100).toFixed(1);
-        vectorInfo = `${count} suas / ${totalCount} total`;
+        vectorInfo = `${totalCount} total`;
         diskInfo = `\n- Disco pgvector: ${dbSizeMB} MB / ${maxGB} GB (${usagePercent}%)`;
       } catch {
         vectorInfo = "erro de conexao";
@@ -1981,7 +2030,11 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         return result;
       },
 
-      getConversationHistory: async (userPhone: string, limit?: number) => {
+      getConversationHistory: async (userPhone: string, limit?: number, numericUserId?: number) => {
+        // Use user_id-based history if available (RBAC), otherwise fallback to phone-based
+        if (numericUserId) {
+          return this.memory.getConversationHistoryByUserId(numericUserId, limit);
+        }
         return this.memory.getConversationHistory(userPhone, limit);
       },
 
@@ -2033,8 +2086,13 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         webConnector.sendTranscription(audioUrl, transcription);
       },
 
-      clearConversation: async (userPhone: string) => {
-        await this.memory.clearConversation(userPhone);
+      clearConversation: async (userPhone: string, numericUserId?: number) => {
+        // Use user_id-based clear if available (RBAC), otherwise fallback to phone-based
+        if (numericUserId) {
+          await this.memory.clearConversationByUserId(numericUserId);
+        } else {
+          await this.memory.clearConversation(userPhone);
+        }
       },
 
       createBlankSubAgentSession: async (connectorName: string, userId: string): Promise<string> => {

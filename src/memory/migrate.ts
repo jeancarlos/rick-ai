@@ -1,6 +1,6 @@
 import { query, isPostgres, closeDatabase } from "./database.js";
 import { closeVectorPool } from "./vector-db.js";
-import { runVectorMigrations } from "./vector-migrate.js";
+import { runVectorMigrations, backfillVectorCreatedBy } from "./vector-migrate.js";
 import { ensureConfigTable } from "./config-store.js";
 import { logger } from "../config/logger.js";
 
@@ -182,6 +182,12 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE users ADD COLUMN IF NOT EXISTS profile JSONB DEFAULT '{}'`,
       `ALTER TABLE users ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ`,
 
+      // Make phone nullable — new RBAC users are identified by connector_identities,
+      // not phone. Legacy users still have phone populated.
+      // PostgreSQL: ALTER COLUMN ... DROP NOT NULL
+      // SQLite: no-op (can't alter column constraints; handled via placeholder in app code)
+      `ALTER TABLE users ALTER COLUMN phone DROP NOT NULL`,
+
       // -- 2. connector_identities table --
       `CREATE TABLE IF NOT EXISTS connector_identities (
         id SERIAL PRIMARY KEY,
@@ -226,8 +232,8 @@ const MIGRATIONS: Migration[] = [
     statements: [
       // Migrate existing data: everything belongs to the admin (owner).
       // Step 1: Set the existing owner user to role='admin', status='active'
-      // Use is_owner = 1 which works on both PostgreSQL (boolean) and SQLite (integer)
-      `UPDATE users SET role = 'admin', status = 'active', display_name = name WHERE is_owner = 1`,
+      // Use is_owner = TRUE (PostgreSQL boolean); SQLite adapter converts to = 1
+      `UPDATE users SET role = 'admin', status = 'active', display_name = name WHERE is_owner = TRUE`,
 
       // Step 2: Create connector_identity for the admin's WhatsApp
       // Uses INSERT ... SELECT to avoid failing if no owner exists (fresh installs)
@@ -244,28 +250,10 @@ const MIGRATIONS: Migration[] = [
 
   {
     name: "011_rbac_memory_global",
-    statements: [
-      // Change memories unique constraint from per-user to global.
-      // Memories are now global knowledge, not per-user.
-      //
-      // PostgreSQL: the UNIQUE(user_phone, category, key) constraint creates
-      // an index named "memories_user_phone_category_key_key". We drop it and
-      // add a new UNIQUE on (category, key) only.
-      //
-      // SQLite: inline UNIQUE constraints create auto-indexes that can't be
-      // dropped. Since all existing data belongs to one user (admin), there
-      // are no (category, key) collisions. The old constraint remains but is
-      // harmless — it's a superset of the new one. The new unique index
-      // enforces the global uniqueness going forward. The old constraint will
-      // be removed in the cleanup phase when user_phone is dropped and the
-      // table is recreated.
-
-      // Drop old constraint index (PostgreSQL only — silently ignored on SQLite)
-      `DROP INDEX IF EXISTS memories_user_phone_category_key_key`,
-
-      // Add new global unique constraint
-      `CREATE UNIQUE INDEX IF NOT EXISTS memories_category_key_unique ON memories(category, key)`,
-    ],
+    // This migration needs backend-specific SQL — handled in code below.
+    // PostgreSQL: ALTER TABLE DROP CONSTRAINT (can't DROP INDEX on constraint-backing index)
+    // SQLite: skip DROP (inline UNIQUE can't be dropped; old constraint is a superset, harmless)
+    statements: [], // populated dynamically in runMigrations()
   },
 ];
 
@@ -301,6 +289,25 @@ export async function runMigrations(): Promise<void> {
         "INSERT INTO migrations (name) VALUES ($1)",
         ["001_rebased_schema"]
       );
+    }
+  }
+
+  // Populate dynamic migration statements that depend on the backend.
+  const m011 = MIGRATIONS.find((m) => m.name === "011_rbac_memory_global");
+  if (m011 && m011.statements.length === 0) {
+    if (isPostgres()) {
+      m011.statements = [
+        // PostgreSQL: drop the UNIQUE constraint (ALTER TABLE, not DROP INDEX,
+        // because the index backs a constraint and can't be dropped directly).
+        `ALTER TABLE memories DROP CONSTRAINT IF EXISTS memories_user_phone_category_key_key`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS memories_category_key_unique ON memories(category, key)`,
+      ];
+    } else {
+      // SQLite: can't drop inline UNIQUE constraints. The old constraint is a
+      // superset of the new one — harmless. Just add the new unique index.
+      m011.statements = [
+        `CREATE UNIQUE INDEX IF NOT EXISTS memories_category_key_unique ON memories(category, key)`,
+      ];
     }
   }
 
@@ -348,6 +355,13 @@ export async function runMigrations(): Promise<void> {
 
   // Run vector DB migrations (separate database — only if vectorDatabaseUrl is set)
   await runVectorMigrations();
+
+  // Backfill created_by in vector DB embeddings with the admin user ID.
+  // Must run after both main DB migrations (where admin is identified) and vector migrations.
+  const adminRow = await query(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`);
+  if (adminRow.rows.length > 0) {
+    await backfillVectorCreatedBy(adminRow.rows[0].id);
+  }
 }
 
 // Compatibility: mark old migrations as applied if the new rebased one is present.

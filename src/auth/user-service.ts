@@ -10,7 +10,7 @@
  *   - Activity tracking
  */
 
-import { query } from "../memory/database.js";
+import { query, isPostgres } from "../memory/database.js";
 import { logger } from "../config/logger.js";
 import { UserRole, UserStatus } from "./permissions.js";
 
@@ -123,13 +123,28 @@ export class UserService {
     externalId: string,
     displayName?: string
   ): Promise<User> {
-    // Create the user record
-    const userResult = await query(
-      `INSERT INTO users (role, status, display_name, profile, created_at, updated_at)
-       VALUES (NULL, 'pending', $1, '{}', NOW(), NOW())
-       RETURNING *`,
-      [displayName || null]
-    );
+    // Create the user record.
+    // phone column: nullable on PostgreSQL (migration 009 drops NOT NULL),
+    // but still NOT NULL on SQLite (can't alter column constraints).
+    // For SQLite, generate a placeholder phone from the connector identity.
+    let userResult;
+    if (isPostgres()) {
+      userResult = await query(
+        `INSERT INTO users (role, status, display_name, profile, created_at, updated_at)
+         VALUES (NULL, 'pending', $1, '{}', NOW(), NOW())
+         RETURNING *`,
+        [displayName || null]
+      );
+    } else {
+      // SQLite: phone is still NOT NULL, use connector:externalId as placeholder
+      const placeholderPhone = `${connector}:${externalId}`;
+      userResult = await query(
+        `INSERT INTO users (phone, role, status, display_name, profile, created_at, updated_at)
+         VALUES ($1, NULL, 'pending', $2, '{}', NOW(), NOW())
+         RETURNING *`,
+        [placeholderPhone, displayName || null]
+      );
+    }
     const user = this.rowToUser(userResult.rows[0]);
 
     // Create the connector identity

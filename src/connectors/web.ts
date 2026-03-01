@@ -54,16 +54,16 @@ export interface WebAgentBridge {
   startEditMode(connectorName: string, userId: string): Promise<string>;
   /** Stop edit mode (returns error message or empty string on success) */
   stopEditMode(): Promise<string>;
-  /** Get conversation history for a user */
-  getConversationHistory(userPhone: string, limit?: number): Promise<Array<{ role: string; content: string; created_at?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }>; message_type?: string }>>;
+  /** Get conversation history for a user (uses numericUserId when available for RBAC) */
+  getConversationHistory(userPhone: string, limit?: number, numericUserId?: number): Promise<Array<{ role: string; content: string; created_at?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }>; message_type?: string }>>;
   /** Get message history for a sub-agent session */
   getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>>;
   /** Get message history for the active edit session */
   getEditHistory(): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>>;
   /** Send audio transcription update to all web clients */
   sendTranscription(audioUrl: string, transcription: string): void;
-  /** Clear conversation history for a user */
-  clearConversation(userPhone: string): Promise<void>;
+  /** Clear conversation history for a user (uses numericUserId when available for RBAC) */
+  clearConversation(userPhone: string, numericUserId?: number): Promise<void>;
   /** Create a blank sub-agent session (no initial task) and return the ack message */
   createBlankSubAgentSession(connectorName: string, userId: string): Promise<string>;
 }
@@ -922,7 +922,7 @@ export class WebConnector implements Connector {
     }
 
     try {
-      const history = await this.agentBridge.getConversationHistory(config.ownerPhone, 50);
+      const history = await this.agentBridge.getConversationHistory(config.ownerPhone, 50, this.adminUserId ?? undefined);
       this.send(ws, { type: "history", messages: history });
     } catch (err) {
       logger.error({ err }, "Failed to load conversation history");
@@ -937,7 +937,7 @@ export class WebConnector implements Connector {
     }
 
     try {
-      await this.agentBridge.clearConversation(config.ownerPhone);
+      await this.agentBridge.clearConversation(config.ownerPhone, this.adminUserId ?? undefined);
       // Notify all authenticated clients so every open tab clears
       this.broadcastToAuthenticated({ type: "history_cleared" });
       logger.info("Conversation history cleared via web UI");

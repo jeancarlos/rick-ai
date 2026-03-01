@@ -340,6 +340,17 @@ function adaptSqlForSqlite(sql: string): string {
   adapted = adapted.replace(/\bDEFAULT\s+TRUE\b/gi, "DEFAULT 1");
   adapted = adapted.replace(/\bDEFAULT\s+FALSE\b/gi, "DEFAULT 0");
 
+  // Boolean comparisons: = TRUE → = 1, = FALSE → = 0
+  // Handles WHERE/SET clauses like `is_owner = TRUE`, `is_active = FALSE`
+  adapted = adapted.replace(/=\s*TRUE\b/gi, "= 1");
+  adapted = adapted.replace(/=\s*FALSE\b/gi, "= 0");
+
+  // Bare TRUE/FALSE in VALUES or expressions (e.g. INSERT ... VALUES (..., TRUE, ...))
+  // Must come after DEFAULT and = replacements to avoid double-conversion.
+  // Use word boundary to avoid replacing inside strings or identifiers.
+  adapted = adapted.replace(/\bTRUE\b/gi, "1");
+  adapted = adapted.replace(/\bFALSE\b/gi, "0");
+
   // BIGINT → INTEGER (SQLite has no BIGINT, but INTEGER handles big values)
   adapted = adapted.replace(/\bBIGINT\b/gi, "INTEGER");
 
@@ -348,6 +359,17 @@ function adaptSqlForSqlite(sql: string): string {
 
   // CREATE EXTENSION → no-op
   if (/^\s*CREATE\s+EXTENSION/i.test(adapted)) {
+    return "SELECT 1";
+  }
+
+  // ALTER TABLE ... ALTER COLUMN → no-op on SQLite (not supported)
+  // Used for DROP NOT NULL, SET DEFAULT, etc. which are PostgreSQL-only.
+  if (/ALTER\s+TABLE\s+\w+\s+ALTER\s+COLUMN/i.test(adapted)) {
+    return "SELECT 1";
+  }
+
+  // ALTER TABLE ... DROP CONSTRAINT → no-op on SQLite (not supported)
+  if (/ALTER\s+TABLE\s+\w+\s+DROP\s+CONSTRAINT/i.test(adapted)) {
     return "SELECT 1";
   }
 

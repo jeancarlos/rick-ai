@@ -316,7 +316,7 @@ export class VectorMemoryService {
 
   /**
    * Semantic search across all global memories (no user_phone filter).
-   * Returns creator role info for LLM context building.
+   * Resolves creator role from the main database (vector DB is separate).
    */
   async searchGlobal(
     queryText: string,
@@ -326,21 +326,40 @@ export class VectorMemoryService {
     const vector = await this.embedding.embed(queryText);
     const pgVector = EmbeddingService.toPgVector(vector);
 
+    // Query vector DB (separate database — can't JOIN with main DB's users table)
     const result = await vectorQuery(
       `SELECT me.id, me.content, me.category, me.source, me.metadata,
               me.hit_count, me.last_hit_at, me.created_by, me.created_at,
-              1 - (me.embedding <=> $1::vector) as similarity,
-              u.role as creator_role
+              1 - (me.embedding <=> $1::vector) as similarity
        FROM memory_embeddings me
-       LEFT JOIN users u ON u.id = me.created_by
        WHERE 1 - (me.embedding <=> $1::vector) > $2
        ORDER BY me.embedding <=> $1::vector
        LIMIT $3`,
       [pgVector, minSimilarity, limit]
     );
 
-    // Increment hit_count for all returned results (fire-and-forget)
+    // Resolve creator_role from main DB for each unique created_by ID
     if (result.rows.length > 0) {
+      const creatorIds = [...new Set(result.rows.map((r: any) => r.created_by).filter(Boolean))];
+      if (creatorIds.length > 0) {
+        try {
+          // Use main DB query (imported at top of file)
+          const { query: mainQuery } = await import("./database.js");
+          const roleResult = await mainQuery(
+            `SELECT id, role FROM users WHERE id = ANY($1)`,
+            [creatorIds]
+          );
+          const roleMap = new Map(roleResult.rows.map((r: any) => [r.id, r.role]));
+          for (const row of result.rows) {
+            (row as any).creator_role = row.created_by ? roleMap.get(row.created_by) || null : null;
+          }
+        } catch (err) {
+          logger.warn({ err }, "Failed to resolve creator roles for vector search");
+          // Still return results without creator_role — non-fatal
+        }
+      }
+
+      // Increment hit_count for all returned results (fire-and-forget)
       const ids = result.rows.map((r: VectorMemory) => r.id);
       vectorQuery(
         `UPDATE memory_embeddings

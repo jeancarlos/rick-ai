@@ -56,14 +56,39 @@ const VECTOR_MIGRATIONS = [
     sql: `
       ALTER TABLE memory_embeddings
         ADD COLUMN IF NOT EXISTS created_by INTEGER;
-
-      -- Populate created_by for existing embeddings (all belong to admin)
-      UPDATE memory_embeddings SET created_by = (
-        SELECT u.id FROM users u WHERE u.role = 'admin' LIMIT 1
-      ) WHERE created_by IS NULL;
     `,
+    // NOTE: Backfilling created_by with the admin user ID is done in
+    // backfillVectorCreatedBy() (called from runMigrations) because the
+    // vector DB is a separate database and can't reference the users table.
   },
 ];
+
+/**
+ * Backfill created_by in memory_embeddings with the admin's user ID.
+ * Called from runMigrations() AFTER main DB migrations (where the admin user
+ * has been identified) and vector migrations have run.
+ *
+ * This is a separate function because the vector DB can't reference the
+ * main DB's users table directly.
+ */
+export async function backfillVectorCreatedBy(adminUserId: number): Promise<void> {
+  if (!config.vectorDatabaseUrl) return;
+
+  try {
+    const result = await vectorQuery(
+      `UPDATE memory_embeddings SET created_by = $1 WHERE created_by IS NULL`,
+      [adminUserId]
+    );
+    if ((result.rowCount ?? 0) > 0) {
+      logger.info(
+        { adminUserId, updated: result.rowCount },
+        "Backfilled created_by in memory_embeddings"
+      );
+    }
+  } catch (err) {
+    logger.warn({ err }, "Failed to backfill created_by in vector DB (non-fatal)");
+  }
+}
 
 export async function runVectorMigrations(): Promise<void> {
   if (!config.vectorDatabaseUrl) {
