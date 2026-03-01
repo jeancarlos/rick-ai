@@ -3562,15 +3562,6 @@ function loadEditHistory(messages) {
   }
 }
 
-function minimizeAllToolBlocks(except) {
-  var blocks = document.querySelectorAll('.tool-use-block');
-  for (var i = 0; i < blocks.length; i++) {
-    if (blocks[i] !== except) {
-      blocks[i].classList.add('minimized');
-    }
-  }
-}
-
 // formatToolLine() and makeToolUseBlock() are loaded from /static/tool-blocks.js
 
 function appendMessageToDOM(text, from, audioUrl, imageUrls, messageType, fileInfos) {
