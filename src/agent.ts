@@ -299,7 +299,9 @@ export class Agent {
       // 1. Encerrar (explicit close words)
       // 2. Continuidade (adjust/fix on the same session)
       // 3. Novo pedido (different topic → nag to close first)
-      if (this.sessionManager.hasDoneSessions()) {
+      // Skip this interception when the message comes from Web UI's main session
+      // (sub-agents have their own dedicated panels there).
+      if (this.sessionManager.hasDoneSessions() && !msg.skipSubAgentRelay) {
         return this.handleSubAgentRelay(userPhone, connectorName, fullText, audioUrl, imageUrls, allImageMedias, fileInfos, numericUserId);
       }
 

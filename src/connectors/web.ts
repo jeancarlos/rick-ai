@@ -675,6 +675,10 @@ export class WebConnector implements Connector {
       numericUserId: this.adminUserId ?? undefined,
       userRole: "admin",
       userStatus: "active",
+      // Web UI: messages from main session should never be intercepted by
+      // sub-agent relay — sub-agents have their own dedicated UI panels.
+      // Only skip when NOT targeting a specific sub-agent session.
+      skipSubAgentRelay: !clientSessionId,
     };
 
     const response = await this.manager.handleIncomingMessage(incoming);

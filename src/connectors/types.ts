@@ -35,6 +35,12 @@ export interface IncomingMessage {
   fileInfos?: Array<{ url: string; name: string; mimeType: string }>;
   /** Quoted/replied-to text, if this is a reply */
   quotedText?: string;
+  /**
+   * When true, skip sub-agent relay interception and go straight to simple chat.
+   * Used by Web UI when the user is explicitly in the main session — sub-agents
+   * have their own dedicated UI panels for follow-up messages.
+   */
+  skipSubAgentRelay?: boolean;
 }
 
 /**
