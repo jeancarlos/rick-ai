@@ -127,8 +127,11 @@ export class Agent {
     const numericUserId = msg.numericUserId;
     const userRole: UserRole = msg.userRole ?? "admin"; // Default to admin for Web UI (pre-RBAC compat)
 
-    // Get or create user (legacy — still needed for pre-RBAC code paths)
-    const user = await this.memory.getOrCreateUser(userPhone, userName);
+    // Get or create user (legacy — only needed when numericUserId is not available)
+    // When RBAC is active, the user was already resolved by the connector.
+    const user = numericUserId
+      ? { id: numericUserId, phone: userPhone, name: userName || null, is_owner: userRole === "admin" }
+      : await this.memory.getOrCreateUser(userPhone, userName);
 
     // If message is a reply to another message, prepend quoted context
     let fullText = rawText;
