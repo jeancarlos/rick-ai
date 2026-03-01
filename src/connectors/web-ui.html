@@ -3314,9 +3314,11 @@ function handleServerMessage(msg) {
           Object.assign(usersData[idx], msg.user);
           renderUsersList();
         }
-        // If viewing this user's detail, refresh it
+        // If viewing this user's detail, refresh it (including conversations and sessions)
         if (selectedUserId === msg.user.id) {
           ws.send(JSON.stringify({ type: 'get_user_detail', userId: msg.user.id }));
+          ws.send(JSON.stringify({ type: 'get_user_conversations', userId: msg.user.id, limit: 30 }));
+          ws.send(JSON.stringify({ type: 'get_user_sessions', userId: msg.user.id }));
         }
         showToast('Usuario atualizado');
       }
