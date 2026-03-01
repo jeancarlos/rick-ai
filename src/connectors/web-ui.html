@@ -5989,15 +5989,42 @@ function waitForRestart(expectedVersion) {
         if (done) return;
         // "status":"ok" means the database is connected (the app is running).
         // WhatsApp/pgvector are optional and do NOT gate health status.
-        if (data.status === 'ok') {
-          done = true;
-          deployInProgress = false;
-          clearInterval(interval);
-          codeOpStatus('Atualizacao instalada! Recarregando...', { success: true, progress: 100 });
-          // Remember to reopen settings after reload
-          sessionStorage.setItem('rick_ota_reopen_settings', '1');
-          setTimeout(function() { location.reload(); }, 1500);
+        if (data.status !== 'ok') return;
+
+        // If we know the expected version, verify the new container is actually
+        // running that version before reloading. The .rick-version file may not
+        // be written yet even though /health already returns OK.
+        if (expectedVersion) {
+          var vToken = getAuthToken();
+          fetch('/api/version?token=' + encodeURIComponent(vToken), { signal: AbortSignal.timeout(3000) })
+            .then(function(vr) { return vr.json(); })
+            .then(function(vData) {
+              if (done) return;
+              var installedSha = vData && vData.current && vData.current.sha;
+              if (!installedSha || installedSha === 'unknown') return; // not ready yet
+              // expectedVersion may be a short SHA prefix — compare with startsWith
+              if (installedSha.indexOf(expectedVersion) === 0 || expectedVersion.indexOf(installedSha) === 0) {
+                done = true;
+                deployInProgress = false;
+                clearInterval(interval);
+                codeOpStatus('Atualizacao instalada! Recarregando...', { success: true, progress: 100 });
+                sessionStorage.setItem('rick_ota_reopen_settings', '1');
+                setTimeout(function() { location.reload(); }, 1500);
+              }
+              // else: version doesn't match yet, keep polling
+            })
+            .catch(function() { /* version endpoint not ready yet, keep polling */ });
+          return;
         }
+
+        // No expected version — reload as soon as health is OK
+        done = true;
+        deployInProgress = false;
+        clearInterval(interval);
+        codeOpStatus('Atualizacao instalada! Recarregando...', { success: true, progress: 100 });
+        // Remember to reopen settings after reload
+        sessionStorage.setItem('rick_ota_reopen_settings', '1');
+        setTimeout(function() { location.reload(); }, 1500);
       })
       .catch(function() { /* server still down, keep polling */ });
   }, 3000);
