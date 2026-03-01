@@ -281,6 +281,7 @@ export class SessionManager {
     }
 
     try {
+      await this.ensureSubagentImage();
       await this.startContainer(session, env, images);
     } catch (err) {
       logger.error({ err, sessionId: id }, "Failed to start sub-agent container");
@@ -403,6 +404,45 @@ export class SessionManager {
   }
 
   // ==================== CONTAINER MANAGEMENT ====================
+
+  /**
+   * Ensure the "subagent" Docker image exists locally.
+   * If not, build it from docker/subagent.Dockerfile (auto-build on first use).
+   */
+  private async ensureSubagentImage(): Promise<void> {
+    try {
+      await execFileAsync("docker", ["image", "inspect", "subagent"], { timeout: 10_000 });
+      return; // Image already exists
+    } catch {
+      // Image not found — build it
+    }
+
+    logger.info({}, "subagent image not found — building from docker/subagent.Dockerfile");
+
+    // Notify user that the image is being built (first time only)
+    // We broadcast via any active session's connector, but since we don't have
+    // direct access here, we log and let the caller handle timeout gracefully.
+
+    const localAppDir = process.cwd(); // /app inside the container
+    const dockerfilePath = `${localAppDir}/docker/subagent.Dockerfile`;
+
+    try {
+      await execFileAsync(
+        "docker",
+        [
+          "build",
+          "-t", "subagent",
+          "-f", dockerfilePath,
+          localAppDir,
+        ],
+        { timeout: 600_000 } // 10 minutes max for first build (Playwright install is slow)
+      );
+      logger.info({}, "subagent image built successfully");
+    } catch (err) {
+      logger.error({ err }, "Failed to build subagent image");
+      throw new Error("Falha ao construir imagem do sub-agente. Verifique os logs.");
+    }
+  }
 
   private async startContainer(session: SubAgentSession, env: Record<string, string>, images?: MediaAttachment[]): Promise<void> {
     // === Agent API: generate JWT and resolve upfront credentials ===
