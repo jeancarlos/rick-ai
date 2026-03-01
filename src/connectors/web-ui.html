@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-<!-- Web UI v2 — soft-refresh OTA -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
@@ -3126,8 +3125,11 @@ function handleServerMessage(msg) {
         sessionStorage.removeItem('rick_ota_reopen_settings');
         setTimeout(function() {
           openSettings();
-          // Give settings time to load, then show "Atualizado"
-          setTimeout(function() { checkForUpdates(); }, 800);
+          // Give version API time to reflect the new .rick-version
+          setTimeout(function() {
+            loadVersionInfo();
+            checkForUpdates();
+          }, 2000);
         }, 300);
       }
       document.getElementById('login-screen').style.display = 'none';
