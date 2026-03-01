@@ -161,6 +161,31 @@ export function startHealthServer(port: number): void {
       return;
     }
 
+    // Shared static assets (CSS/JS used by both web-ui.html and session-viewer.html)
+    if (req.url?.startsWith("/static/") && req.method === "GET") {
+      const filename = req.url.slice("/static/".length);
+      // Whitelist: only serve known files, no path traversal
+      if (/^[\w-]+\.(css|js)$/.test(filename)) {
+        const ext = filename.endsWith(".css") ? "css" : "js";
+        const mime = ext === "css" ? "text/css" : "application/javascript";
+        const paths = [
+          join(process.cwd(), "dist", "connectors", "static", filename),
+          join(process.cwd(), "src", "connectors", "static", filename),
+        ];
+        for (const p of paths) {
+          try {
+            const content = await readFile(p, "utf-8");
+            res.writeHead(200, { "Content-Type": `${mime}; charset=utf-8`, "Cache-Control": "public, max-age=3600" });
+            res.end(content);
+            return;
+          } catch { /* try next */ }
+        }
+      }
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found");
+      return;
+    }
+
     // Media blob endpoint: /audio/:id, /img/:id or /file/:id (all use audio_blobs table)
     const mediaMatch = req.url?.match(/^\/(audio|img|file)\/([a-f0-9]{16})$/);
     if (mediaMatch && req.method === "GET") {

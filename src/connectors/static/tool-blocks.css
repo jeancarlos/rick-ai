@@ -1,0 +1,116 @@
+/**
+ * Shared tool-use terminal block styles.
+ * Used by both web-ui.html and session-viewer.html.
+ */
+
+.tool-use-block {
+  flex-shrink: 0;
+  align-self: flex-start;
+  max-width: 85%;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  overflow: hidden;
+  animation: msgIn 0.2s ease-out;
+  font-family: 'SF Mono', 'Cascadia Code', Consolas, 'Courier New', monospace;
+  font-size: 0.8rem;
+}
+
+.tool-use-block .terminal-header {
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+  cursor: pointer;
+}
+
+.tool-use-block .terminal-title {
+  flex: 1;
+  text-align: center;
+  font-size: 0.75rem;
+  color: #8b949e;
+  letter-spacing: 0.04em;
+}
+
+.tool-use-block .terminal-body {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 240px;
+  max-height: 260px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.tool-use-block .terminal-body::-webkit-scrollbar { width: 4px; }
+.tool-use-block .terminal-body::-webkit-scrollbar-track { background: transparent; }
+.tool-use-block .terminal-body::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+
+.tool-use-block .terminal-line {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.tool-use-block .tl-time {
+  color: #484f58;
+  font-size: 0.68rem;
+  flex-shrink: 0;
+  min-width: 32px;
+  user-select: none;
+}
+
+.tool-use-block .tl-arrow {
+  color: #3fb950;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.tool-use-block .tl-tool {
+  color: #79c0ff;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.tool-use-block .tl-arg {
+  color: #7ee787;
+  opacity: 0.85;
+  word-break: break-all;
+  min-width: 0;
+}
+
+.tool-use-block .tl-plain {
+  color: #7ee787;
+  word-break: break-all;
+}
+
+.tool-use-block .terminal-footer {
+  display: none;
+}
+
+.tool-use-block .terminal-toggle {
+  font-size: 0.72rem;
+  color: #8b949e;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+  line-height: 1;
+}
+
+.tool-use-block.minimized .terminal-toggle {
+  transform: rotate(-90deg);
+}
+
+.tool-use-block.minimized .terminal-header {
+  border-bottom: none;
+}
+
+.tool-use-block.minimized .terminal-body {
+  display: none;
+}
