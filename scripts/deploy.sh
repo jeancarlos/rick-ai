@@ -246,9 +246,8 @@ docker rmi "$CANDIDATE_TAG" 2>/dev/null || true
 # ==================== STEP 7: WATCHDOG ====================
 
 # Wait for the container to become healthy.
-# We check that /health returns valid JSON with "postgres":true.
-# We do NOT require WhatsApp to be connected — WhatsApp reconnection can
-# take 30-60s+ and is independent of whether the deploy succeeded.
+# /health returns "status":"ok" when the database is connected (PostgreSQL or SQLite).
+# WhatsApp and pgvector are optional — they do NOT gate health status.
 # The watchdog tolerates initial failures (container still starting up)
 # and only fails if the server never responds healthily within the timeout.
 
@@ -260,17 +259,16 @@ MAX_CHECKS=24  # 24 * 5s = 120s
 while [ "$i" -le "$MAX_CHECKS" ]; do
   sleep 5
   RESP=$(wget -qO- "http://localhost:$HEALTH_PORT_MAIN/health" 2>/dev/null || echo "")
-  if echo "$RESP" | grep -q '"postgres":true'; then
-    log "Watchdog check $i/$MAX_CHECKS: postgres connected"
+  if echo "$RESP" | grep -q '"status":"ok"'; then
+    log "Watchdog check $i/$MAX_CHECKS: healthy"
     WATCH_OK=true
-    # Once postgres is connected, the app is running correctly.
-    # Continue monitoring for a few more checks to catch immediate crashes.
+    # App is running. Continue monitoring for a few more checks to catch immediate crashes.
     STABLE_CHECKS=0
     while [ "$STABLE_CHECKS" -lt 3 ] && [ "$i" -le "$MAX_CHECKS" ]; do
       sleep 5
       i=$((i + 1))
       RESP=$(wget -qO- "http://localhost:$HEALTH_PORT_MAIN/health" 2>/dev/null || echo "")
-      if echo "$RESP" | grep -q '"postgres":true'; then
+      if echo "$RESP" | grep -q '"status":"ok"'; then
         STABLE_CHECKS=$((STABLE_CHECKS + 1))
         log "Watchdog stability check $STABLE_CHECKS/3: ok"
       else

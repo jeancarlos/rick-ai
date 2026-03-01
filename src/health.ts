@@ -23,6 +23,8 @@ import type { VectorMemoryService } from "./memory/vector-memory-service.js";
  */
 
 interface HealthState {
+  /** App has completed initialization (DB ready, config loaded, connectors started) */
+  ready: boolean;
   whatsappConnected: boolean;
   postgresConnected: boolean;
   pgvectorConnected: boolean;
@@ -30,6 +32,7 @@ interface HealthState {
 }
 
 const state: HealthState = {
+  ready: false,
   whatsappConnected: false,
   postgresConnected: false,
   pgvectorConnected: false,
@@ -40,8 +43,13 @@ export function setHealthy(key: keyof Omit<HealthState, "startedAt">, value: boo
   state[key] = value;
 }
 
+/**
+ * The app is healthy if the database is ready (postgresConnected covers both
+ * PostgreSQL and SQLite — set to true after migrations complete).
+ * WhatsApp and pgvector are optional services and do NOT gate health.
+ */
 export function isHealthy(): boolean {
-  return state.whatsappConnected && state.postgresConnected;
+  return state.postgresConnected;
 }
 
 /** Cached HTML files (loaded once at first request) */
@@ -120,6 +128,7 @@ export function startHealthServer(port: number): void {
 
       const body = JSON.stringify({
         status: healthy ? "ok" : "unhealthy",
+        ready: state.ready,
         uptime: uptimeSeconds,
         whatsapp: state.whatsappConnected,
         postgres: state.postgresConnected,

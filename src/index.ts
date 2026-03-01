@@ -56,9 +56,10 @@ async function main() {
   const healthOnly = process.env.HEALTH_ONLY === "true";
 
   if (healthOnly) {
-    // In HEALTH_ONLY mode, mark as healthy immediately and just keep running
-    // (the health server is already listening — deploy pipeline will curl it)
-    setHealthy("whatsappConnected", true); // fake it so /health returns "ok"
+    // In HEALTH_ONLY mode, mark as ready and just keep running.
+    // DB is already connected (postgresConnected=true from migration step above),
+    // so isHealthy() returns true. No need to fake whatsappConnected.
+    setHealthy("ready", true);
     logger.info("HEALTH_ONLY mode — skipping connectors and agent initialization");
 
     // Keep process alive
@@ -143,6 +144,11 @@ async function main() {
 
   // 10. Start all connectors
   await connectorManager.startAll();
+
+  // Mark the app as fully initialized (DB ready, config loaded, connectors started).
+  // WhatsApp may still be reconnecting in the background — that's fine, it's optional.
+  setHealthy("ready", true);
+  logger.info("App fully initialized and ready");
 
   // 10b. Recover sub-agent sessions from containers that survived a restart
   agent.recoverOrphanedSessions().catch((err) => {

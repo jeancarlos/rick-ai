@@ -5941,11 +5941,9 @@ function waitForRestart(expectedVersion) {
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (done) return;
-        // Check that postgres is connected — the server is running and functional.
-        // We do NOT require WhatsApp (data.status === 'ok') because WhatsApp
-        // reconnection can take 30-60s+ after a restart. Postgres is enough to
-        // confirm the new code is running and the DB is accessible.
-        if (data.postgres === true) {
+        // "status":"ok" means the database is connected (the app is running).
+        // WhatsApp/pgvector are optional and do NOT gate health status.
+        if (data.status === 'ok') {
           done = true;
           // Disable the WS path so auth_ok doesn't trigger a second reload.
           deployInProgress = false;
