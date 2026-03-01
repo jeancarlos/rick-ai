@@ -289,9 +289,6 @@ rick-ai/
 │   │   └── agent.mjs                  # Autonomous agent script (LLM cascade + tools)
 │   ├── subagent-edit.Dockerfile       # Multi-provider edit image (Claude→GPT→Gemini, auto-built)
 │   └── edit-agent.mjs                 # Entry point: routes to Claude CLI / OpenAI / Gemini API
-│   └── subagent-research/             # Legacy research sub-agent
-│       ├── Dockerfile
-│       └── research.mjs
 ├── scripts/
 │   └── deploy.sh                      # Safe deploy pipeline (backup → build → smoke → swap → watchdog)
 ├── Dockerfile                         # Main agent image (Node.js 22 + Docker CLI)

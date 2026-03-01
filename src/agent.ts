@@ -286,7 +286,7 @@ export class Agent {
     // Show typing indicator while processing (classification + LLM call can take several seconds)
     await this.connectorManager.setTyping(connectorName, userPhone, true);
     try {
-      // Keep OAuth tokens fresh — needed for code sub-agent GPT fallback
+      // Keep OAuth tokens fresh — needed for sub-agent LLM fallback
       await this.ensureOAuthTokens(userPhone);
 
       // Collect all images for potential sub-agent forwarding
@@ -856,21 +856,21 @@ REGRAS IMPORTANTES:
 9. Voce tem memoria semantica — consegue lembrar de conversas passadas e buscar por significado, nao apenas por palavras exatas.
 
 CAPACIDADES:
-- Voce roda no Gemini Flash para conversa. Tarefas de codigo vao para Claude Opus (com fallback GPT Codex). Pesquisa vai para Gemini Pro.
+- Voce roda no Gemini Flash para conversa direta.
 - Voce tem acesso a memorias estruturadas (chave-valor) e semanticas (busca por significado)
 - Voce pode listar, buscar, ou apagar memorias
-- O usuario pode conectar contas com /conectar claude ou /conectar gpt (necessario para sub-agentes de codigo)
-- Voce tem sub-agentes especializados (codigo e pesquisa web) que pode delegar tarefas complexas
-- Quando um sub-agente precisa de credenciais (senhas, tokens, etc.), voce primeiro busca na sua memoria. Se nao tem, pergunta ao usuario, salva, e entao executa.
+- O usuario pode conectar contas com /conectar claude ou /conectar gpt (amplia os modelos disponiveis para o sub-agente)
+- Voce tem um sub-agente autonomo que pode delegar tarefas complexas. Ele e capaz de programar, pesquisar na web, acessar contas do usuario via browser, e executar acoes em servicos externos. O roteamento e automatico — voce nao precisa escolher tipo de sub-agente.
+- Quando o sub-agente precisa de credenciais (senhas, tokens, etc.), voce primeiro busca na sua memoria. Se nao tem, pergunta ao usuario, salva, e entao executa.
 - Credenciais salvas ficam na categoria "credenciais" ou "senhas" da sua memoria
 
 REGRA ANTI-ALUCINACAO (CRITICA — NUNCA viole):
 - NUNCA invente informacoes que voce nao tem. Se nao sabe, diga que nao sabe.
-- NUNCA finja ter executado acoes que nao executou. Se um sub-agente nao retornou resultado, NAO invente um resultado.
+- NUNCA finja ter executado acoes que nao executou. Se o sub-agente nao retornou resultado, NAO invente um resultado.
 - NUNCA fabrique dados ficticios (emails, notificacoes, mensagens, etc).
-- Quando o usuario pedir algo que requer um sub-agente (codigo, pesquisa, acessar emails), o roteamento e automatico. NAO tente responder voce mesmo fingindo que acessou algo.
+- Quando o usuario pedir algo que requer o sub-agente (codigo, pesquisa, acessar emails), o roteamento e automatico. NAO tente responder voce mesmo fingindo que acessou algo.
 - Se voce nao tem certeza se pode fazer algo, diga honestamente e sugira alternativas.
-- VOCE NAO TEM ACESSO A NENHUM SERVICO EXTERNO (email, sites, contas). Somente os sub-agentes de pesquisa podem acessar. Se o usuario pedir para APAGAR, ENVIAR, MODIFICAR, ou REALIZAR qualquer acao em uma conta ou servico externo, diga: "Preciso acionar o sub-agente pra isso. Vou delegar a tarefa." NAO diga que fez a acao voce mesmo. NUNCA diga "Pronto, apaguei" ou "Feito, enviei" — isso e MENTIRA se voce nao delegou a um sub-agente.`;
+- VOCE NAO TEM ACESSO A NENHUM SERVICO EXTERNO (email, sites, contas). Somente o sub-agente pode acessar. Se o usuario pedir para APAGAR, ENVIAR, MODIFICAR, ou REALIZAR qualquer acao em uma conta ou servico externo, diga: "Preciso acionar o sub-agente pra isso. Vou delegar a tarefa." NAO diga que fez a acao voce mesmo. NUNCA diga "Pronto, apaguei" ou "Feito, enviei" — isso e MENTIRA se voce nao delegou ao sub-agente.`;
 
     // ==================== RBAC: Role-specific instructions ====================
     if (userRole === "admin") {
@@ -1069,8 +1069,7 @@ O link expira em 10 minutos.`;
 
 Conta: ${result.email || "conectada"}
 
-Use /modelo claude opus para trocar para o Claude.
-O token e renovado automaticamente.`;
+O sub-agente agora pode usar o Claude Opus. O token e renovado automaticamente.`;
   }
 
   private async cmdDisconnectClaude(userPhone: string): Promise<string> {
@@ -1138,8 +1137,7 @@ O link expira em 10 minutos.`;
 
 Conta: ${result.email || "conectada"}
 
-Use /modelo gpt codex para trocar para o GPT Codex.
-O token e renovado automaticamente.`;
+O sub-agente agora pode usar o GPT Codex como fallback. O token e renovado automaticamente.`;
   }
 
   private async cmdDisconnectGPT(userPhone: string): Promise<string> {
@@ -1167,15 +1165,14 @@ O token e renovado automaticamente.`;
 
     return `*Modelos do Rick:*
 
-*Chat:* Gemini Flash (padrao, sem fallback)
-*Codigo:* Claude Opus (primario) → GPT Codex (fallback)
-*Pesquisa:* Gemini Pro (sem fallback)
+*Chat:* Gemini Flash (conversa direta)
+*Sub-agente:* Claude Opus (primario) → GPT Codex → Gemini Pro (fallbacks)
 
 *Conexoes OAuth:*
 - Claude: ${claudeStatus.connected ? `conectado (${claudeStatus.email || ""})` : "/conectar claude"}
 - GPT: ${gptStatus.connected ? `conectado (${gptStatus.email || ""})` : "/conectar gpt"}
 
-_Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre usa Gemini Flash._`;
+_Claude e GPT ampliam as capacidades do sub-agente. O chat principal sempre usa Gemini Flash._`;
   }
 
   // ==================== MEMORY COMMANDS ====================
@@ -1582,7 +1579,7 @@ _Claude e GPT sao usados pelos sub-agentes de codigo. O chat principal sempre us
 /publish [usuario/repo] - deploy + push para GitHub
 
 *Modelos:*
-Chat: Gemini Flash | Codigo: Claude → GPT | Pesquisa: Gemini Pro
+Chat: Gemini Flash | Sub-agente: Claude → GPT → Gemini Pro
 
 *Dica:* Voce tambem pode pedir naturalmente:
 "Lembra que meu email e x@y.com"`;
@@ -1642,9 +1639,8 @@ Chat: Gemini Flash | Codigo: Claude → GPT | Pesquisa: Gemini Pro
     const connectorInfo = connectors.map((c) => c.name).join(", ") || "nenhum";
 
     return `*Status do ${config.agentName}:*
-- Chat: Gemini Flash (fixo)
-- Codigo: Claude Opus → GPT Codex (fallback)
-- Pesquisa: Gemini Pro
+- Chat: Gemini Flash (conversa direta)
+- Sub-agente: Claude Opus → GPT Codex → Gemini Pro (fallbacks)
 - Claude OAuth: ${claudeInfo}
 - GPT OAuth: ${gptInfo}
 - Sub-agentes: ${subAgentInfo}
