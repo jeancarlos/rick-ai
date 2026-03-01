@@ -9,7 +9,7 @@ import type { UserService, User, UserWithIdentities } from "../auth/user-service
 import type { MemoryService } from "../memory/memory-service.js";
 import { httpServer } from "../health.js";
 import { config, reloadConfig } from "../config/env.js";
-import { configSet, SETTINGS_KEY_MAP } from "../memory/config-store.js";
+import { configGet, configSet, SETTINGS_KEY_MAP, ENV_SKIP_KEYS } from "../memory/config-store.js";
 import { isPostgres, query } from "../memory/database.js";
 import { logger, getLogBuffer } from "../config/logger.js";
 import { ClaudeOAuthService } from "../auth/claude-oauth.js";
@@ -739,7 +739,7 @@ export class WebConnector implements Connector {
           githubToken: mask(githubToken),
           githubTokenSet: !!githubToken,
           agentName: config.agentName,
-          agentLogo: process.env.AGENT_LOGO || "",
+          agentLogo: (await configGet("AGENT_LOGO")) || "",
           whatsappConnected: this.whatsappConnector?.isConnected() || false,
           editModeActive: this.agentBridge?.isEditModeActive() || false,
           dbBackend: isPostgres() ? "postgresql" : "sqlite",
@@ -765,7 +765,7 @@ export class WebConnector implements Connector {
         const value = settings[settingKey];
         if (value === "__CLEAR__") {
           await configSet(envKey, "");
-          process.env[envKey] = "";
+          if (!ENV_SKIP_KEYS.has(envKey)) process.env[envKey] = "";
           changed = true;
           if (restartNeeded.has(envKey)) needsRestart = true;
           continue;
@@ -773,8 +773,8 @@ export class WebConnector implements Connector {
         if (value !== undefined && value !== "" && typeof value === "string" && !value.includes("****")) {
           // Only save if the value isn't masked (user actually changed it)
           await configSet(envKey, value);
-          // Also update process.env so runtime picks it up
-          process.env[envKey] = value;
+          // Also update process.env so runtime picks it up (skip large values like logos)
+          if (!ENV_SKIP_KEYS.has(envKey)) process.env[envKey] = value;
           changed = true;
           if (restartNeeded.has(envKey)) {
             needsRestart = true;

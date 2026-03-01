@@ -293,8 +293,6 @@ rick-ai/
 │   └── deploy.sh                      # Safe deploy pipeline (backup → build → smoke → swap → watchdog)
 ├── Dockerfile                         # Main agent image (Node.js 22 + Docker CLI)
 ├── docker-compose.yml                 # Agent service definition
-├── deploy-db.sh                       # PostgreSQL deploy on Oracle Cloud
-├── setup-oracle.sh                    # Oracle Cloud VM initial setup
 ├── package.json
 ├── tsconfig.json
 ├── .env.example
@@ -444,17 +442,14 @@ cp .env.example .env
 # Edit .env with your GEMINI_API_KEY (minimum required)
 # Optionally set DATABASE_URL, WEB_AUTH_PASSWORD, etc.
 
-# 2. Deploy PostgreSQL (optional — uses Oracle Cloud VM)
-./deploy-db.sh
-
-# 3. Build and start
+# 2. Build and start
 docker compose up -d --build
 
-# 4. Pair WhatsApp
+# 3. Pair WhatsApp
 docker compose logs -f agent
 # Scan the QR code with WhatsApp (Linked Devices)
 
-# 5. Message yourself on WhatsApp or open the Web UI
+# 4. Message yourself on WhatsApp or open the Web UI
 # Rick will respond to your self-chat messages
 # Web UI available at http://localhost:80 (requires WEB_AUTH_PASSWORD)
 ```

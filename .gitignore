@@ -2,10 +2,8 @@ node_modules/
 dist/
 .env
 auth_info/
-server-backup/
 *.log
 ._*
 .DS_Store
-qr-whatsapp.png
 .rick-latest-version.json
 .rick-version

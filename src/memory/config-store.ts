@@ -104,6 +104,14 @@ export const SETTINGS_KEY_MAP: Record<string, string> = {
 };
 
 /**
+ * Keys that should NEVER be injected into process.env.
+ * Large values (like base64 logos) would bloat the environment and cause
+ * E2BIG errors when spawning child processes (docker, etc.).
+ * These are read directly from the config store via configGet() when needed.
+ */
+export const ENV_SKIP_KEYS = new Set(["AGENT_LOGO"]);
+
+/**
  * Load all config store values and merge with process.env defaults.
  * Returns a merged config object. process.env always takes precedence.
  *
@@ -123,8 +131,10 @@ export async function loadConfigFromStore(): Promise<Record<string, string>> {
         merged[envKey] = envVal;
       } else if (storeVal) {
         merged[envKey] = storeVal;
-        // Also inject into process.env so config reads pick it up
-        process.env[envKey] = storeVal;
+        // Inject into process.env so config reads pick it up (skip large values)
+        if (!ENV_SKIP_KEYS.has(envKey)) {
+          process.env[envKey] = storeVal;
+        }
       }
     }
 
@@ -133,7 +143,9 @@ export async function loadConfigFromStore(): Promise<Record<string, string>> {
     );
     for (const key of storeOnly) {
       merged[key] = stored[key];
-      process.env[key] = stored[key];
+      if (!ENV_SKIP_KEYS.has(key)) {
+        process.env[key] = stored[key];
+      }
     }
 
     logger.info(

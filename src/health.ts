@@ -764,8 +764,7 @@ const EXPORT_INCLUDES = [
   "README.md",
   "LICENSE",
   ".rick-version",
-  "deploy-db.sh",
-  "setup-oracle.sh",
+
 ];
 
 async function handleCodeExport(res: ServerResponse): Promise<void> {

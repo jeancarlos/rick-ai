@@ -67,7 +67,7 @@ do_rollback() {
   done
   # Restore root files
   for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json \
-            .gitignore .env.example LICENSE .rick-version deploy-db.sh setup-oracle.sh; do
+            .gitignore .env.example LICENSE .rick-version; do
     if [ -f "$BACKUP_DIR/$f" ]; then
       cp "$BACKUP_DIR/$f" "$PROJECT_DIR/$f"
     fi
@@ -91,7 +91,7 @@ for d in src scripts docker .github; do
 done
 # Backup root-level files
 for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json \
-          .gitignore .env.example LICENSE .rick-version deploy-db.sh setup-oracle.sh; do
+          .gitignore .env.example LICENSE .rick-version; do
   if [ -f "$PROJECT_DIR/$f" ]; then
     cp "$PROJECT_DIR/$f" "$BACKUP_DIR/$f"
   fi
@@ -122,7 +122,7 @@ fi
 
 # Copy root-level config files that may have been edited in the staging dir
 for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json \
-          .gitignore .env.example LICENSE .rick-version deploy-db.sh setup-oracle.sh; do
+          .gitignore .env.example LICENSE .rick-version; do
   if [ -f "$STAGING_DIR/$f" ]; then
     cp "$STAGING_DIR/$f" "$PROJECT_DIR/$f"
   fi
