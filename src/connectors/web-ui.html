@@ -3116,18 +3116,19 @@ function handleServerMessage(msg) {
       authenticated = true;
       reconnectAttempts = 0;
       try { localStorage.setItem('rick_pwd', password); } catch(e) {}
-      // After a deploy the server restarts — soft-refresh instead of full reload
-      // so the settings modal stays open and shows "Atualizado"
+      // After a deploy the server restarts — check if we should reopen settings
       if (deployInProgress) {
         deployInProgress = false;
-        // Refresh version info now that the server is back with new code
+        // The health poll path will handle the reload — just clear the flag
+      }
+      // Reopen settings modal after OTA reload (flag set before reload)
+      if (sessionStorage.getItem('rick_ota_reopen_settings')) {
+        sessionStorage.removeItem('rick_ota_reopen_settings');
         setTimeout(function() {
-          loadVersionInfo();
-          checkForUpdates();
-          codeOpStatus('');
-        }, 500);
-        // Don't break — fall through to normal auth_ok handling
-        // (settings + history will be re-fetched below)
+          openSettings();
+          // Give settings time to load, then show "Atualizado"
+          setTimeout(function() { checkForUpdates(); }, 800);
+        }, 300);
       }
       document.getElementById('login-screen').style.display = 'none';
       document.getElementById('app-screen').style.display = 'block';
@@ -5976,17 +5977,12 @@ function waitForRestart(expectedVersion) {
         // WhatsApp/pgvector are optional and do NOT gate health status.
         if (data.status === 'ok') {
           done = true;
-          // Disable the WS path so auth_ok doesn't trigger a second reload.
           deployInProgress = false;
           clearInterval(interval);
-          codeOpStatus('');
-          // Soft-refresh: reload version info + settings without closing the modal
-          loadVersionInfo();
-          checkForUpdates();
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'get_settings' }));
-            ws.send(JSON.stringify({ type: 'get_history' }));
-          }
+          codeOpStatus('Atualizacao instalada! Recarregando...', { success: true, progress: 100 });
+          // Remember to reopen settings after reload
+          sessionStorage.setItem('rick_ota_reopen_settings', '1');
+          setTimeout(function() { location.reload(); }, 1500);
         }
       })
       .catch(function() { /* server still down, keep polling */ });
