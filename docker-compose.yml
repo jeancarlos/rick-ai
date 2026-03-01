@@ -1,5 +1,6 @@
 services:
   agent:
+    image: rick-ai-agent:latest
     build:
       context: .
       args:

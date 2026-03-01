@@ -226,14 +226,17 @@ log "Smoke test passed!"
 log "Step 6: Swapping — promoting candidate image..."
 
 # Re-tag the candidate image as the image docker-compose expects.
-# This avoids rebuilding the image a second time — the candidate was already
-# built and smoke-tested in steps 3-5.
+# docker-compose.yml explicitly sets `image: rick-ai-agent:latest` so
+# the image name is predictable and doesn't depend on the project directory name.
 COMPOSE_IMAGE="rick-ai-agent:latest"
 docker tag "$CANDIDATE_TAG" "$COMPOSE_IMAGE"
+log "Tagged candidate as $COMPOSE_IMAGE"
 
-# Restart the service using the pre-built image (no --build needed)
+# Restart the service using the pre-built image (no --build needed).
+# IMPORTANT: we do NOT use --build here because the image is already built
+# and smoke-tested. Using --build would rebuild from scratch, wasting time.
 cd "$PROJECT_DIR"
-docker compose -f "$COMPOSE_FILE" up -d 2>&1
+docker compose -f "$COMPOSE_FILE" up -d --no-build 2>&1
 
 log "Main service restarted with new code"
 
@@ -242,25 +245,52 @@ docker rmi "$CANDIDATE_TAG" 2>/dev/null || true
 
 # ==================== STEP 7: WATCHDOG ====================
 
-log "Step 7: Watchdog — monitoring for 60s..."
+# Wait for the container to become healthy.
+# We check that /health returns valid JSON with "postgres":true.
+# We do NOT require WhatsApp to be connected — WhatsApp reconnection can
+# take 30-60s+ and is independent of whether the deploy succeeded.
+# The watchdog tolerates initial failures (container still starting up)
+# and only fails if the server never responds healthily within the timeout.
 
-WATCH_OK=true
+log "Step 7: Watchdog — waiting up to 120s for healthy response..."
+
+WATCH_OK=false
 i=1
-while [ "$i" -le 12 ]; do
+MAX_CHECKS=24  # 24 * 5s = 120s
+while [ "$i" -le "$MAX_CHECKS" ]; do
   sleep 5
   RESP=$(wget -qO- "http://localhost:$HEALTH_PORT_MAIN/health" 2>/dev/null || echo "")
-  if echo "$RESP" | grep -q '"status":"ok"'; then
-    log "Watchdog check $i/12: healthy"
+  if echo "$RESP" | grep -q '"postgres":true'; then
+    log "Watchdog check $i/$MAX_CHECKS: postgres connected"
+    WATCH_OK=true
+    # Once postgres is connected, the app is running correctly.
+    # Continue monitoring for a few more checks to catch immediate crashes.
+    STABLE_CHECKS=0
+    while [ "$STABLE_CHECKS" -lt 3 ] && [ "$i" -le "$MAX_CHECKS" ]; do
+      sleep 5
+      i=$((i + 1))
+      RESP=$(wget -qO- "http://localhost:$HEALTH_PORT_MAIN/health" 2>/dev/null || echo "")
+      if echo "$RESP" | grep -q '"postgres":true'; then
+        STABLE_CHECKS=$((STABLE_CHECKS + 1))
+        log "Watchdog stability check $STABLE_CHECKS/3: ok"
+      else
+        log "Watchdog stability check: app went down, retrying..."
+        STABLE_CHECKS=0
+        WATCH_OK=false
+        break
+      fi
+    done
+    if [ "$WATCH_OK" = "true" ]; then
+      break
+    fi
   else
-    err "Watchdog check $i/12 FAILED: $RESP"
-    WATCH_OK=false
-    break
+    log "Watchdog check $i/$MAX_CHECKS: waiting... ($RESP)"
   fi
   i=$((i + 1))
 done
 
 if [ "$WATCH_OK" != "true" ]; then
-  err "Watchdog detected failure! Rolling back..."
+  err "Watchdog: app never became healthy within ${MAX_CHECKS}x5s! Rolling back..."
   do_rollback
 
   # Rebuild with old code
