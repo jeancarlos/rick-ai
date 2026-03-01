@@ -2576,6 +2576,11 @@
             <button class="settings-action-btn" style="margin-top:6px;font-size:0.7rem;padding:2px 8px;" onclick="clearAgentLogo()" id="btn-clear-logo" title="Remover logo personalizada">Limpar</button>
           </div>
         </div>
+        <div style="margin-top:12px;">
+          <span class="settings-label">URL base (para links de sessao no WhatsApp)</span>
+          <input type="text" class="settings-input" id="setting-web-base-url" placeholder="http://10.1.0.190" onblur="autoSaveWebBaseUrl()">
+          <p class="settings-hint" style="margin-top:4px;">Ex: http://10.1.0.190 ou https://meudominio.com (sem barra final)</p>
+        </div>
       </div>
     </div>
 
@@ -5099,6 +5104,10 @@ function populateSettings(settings) {
   var nameInput = document.getElementById('setting-agent-name');
   if (nameInput) nameInput.value = settings.agentName || 'Rick';
 
+  // Web base URL
+  var urlInput = document.getElementById('setting-web-base-url');
+  if (urlInput && settings.webBaseUrl) urlInput.value = settings.webBaseUrl;
+
   if (settings.geminiApiKey) {
     document.getElementById('setting-gemini-key').value = settings.geminiApiKey;
   }
@@ -5330,6 +5339,15 @@ function autoSaveAgentName() {
       ws.send(JSON.stringify({ type: 'get_settings' }));
     }
   }, 500);
+}
+
+function autoSaveWebBaseUrl() {
+  var input = document.getElementById('setting-web-base-url');
+  if (!input) return;
+  var val = input.value.trim().replace(/\/+$/, '');
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'save_settings', settings: { webBaseUrl: val || '__CLEAR__' } }));
+  showToast(val ? 'URL base salva: ' + val : 'URL base removida');
 }
 
 function handleLogoUpload(input) {

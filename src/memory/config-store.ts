@@ -101,6 +101,7 @@ export const SETTINGS_KEY_MAP: Record<string, string> = {
   githubToken: "GITHUB_TOKEN",
   agentName: "AGENT_NAME",
   agentLogo: "AGENT_LOGO",
+  webBaseUrl: "WEB_BASE_URL",
 };
 
 /**

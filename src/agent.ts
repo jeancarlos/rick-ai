@@ -557,12 +557,16 @@ export class Agent {
       return `Erro ao executar sub-agente: ${(err as Error).message}`;
     }
 
-    // Build ack with Rick variant name + public session link
+    // Build ack with variant name + public session link (if webBaseUrl configured)
     const rickName = getSessionRickName(session.id);
-    const baseUrl = config.webBaseUrl || `https://rick.barroso.tec.br`;
-    const sessionUrl = `${baseUrl}/s/${session.id}`;
-
-    const ack = `O *${rickName}* vai cuidar disso pra voce, pode acompanhar aqui:\n${sessionUrl}`;
+    const baseUrl = config.webBaseUrl;
+    let ack: string;
+    if (baseUrl) {
+      const sessionUrl = `${baseUrl}/s/${session.id}`;
+      ack = `O *${rickName}* vai cuidar disso pra voce, pode acompanhar aqui:\n${sessionUrl}`;
+    } else {
+      ack = `O *${rickName}* vai cuidar disso pra voce. Aguarde o resultado.`;
+    }
 
     await this.memory.saveMessageByUserId(userId!, "assistant", ack);
 
@@ -2117,10 +2121,14 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         }
 
         const rickName = getSessionRickName(session.id);
-        const baseUrl = config.webBaseUrl || `https://rick.barroso.tec.br`;
-        const sessionUrl = `${baseUrl}/s/${session.id}`;
-
-        const ack = `Sessao *${rickName}* aberta e aguardando sua primeira tarefa:\n${sessionUrl}`;
+        const baseUrl = config.webBaseUrl;
+        let ack: string;
+        if (baseUrl) {
+          const sessionUrl = `${baseUrl}/s/${session.id}`;
+          ack = `Sessao *${rickName}* aberta e aguardando sua primeira tarefa:\n${sessionUrl}`;
+        } else {
+          ack = `Sessao *${rickName}* aberta e aguardando sua primeira tarefa.`;
+        }
         await this.memory.saveMessageByUserId(numUserId, "assistant", ack);
         return ack;
       },

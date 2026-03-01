@@ -756,6 +756,7 @@ export class WebConnector implements Connector {
           githubTokenSet: !!githubToken,
           agentName: config.agentName,
           agentLogo: (await configGet("AGENT_LOGO")) || "",
+          webBaseUrl: config.webBaseUrl,
           whatsappConnected: this.whatsappConnector?.isConnected() || false,
           editModeActive: this.agentBridge?.isEditModeActive() || false,
           dbBackend: isPostgres() ? "postgresql" : "sqlite",
