@@ -41,7 +41,7 @@ function buildConfig() {
     ownerPhone: process.env.OWNER_PHONE || "",
 
     // Agent
-    agentName: process.env.AGENT_NAME || "Jarvis",
+    agentName: process.env.AGENT_NAME || "Rick",
     agentLanguage: process.env.AGENT_LANGUAGE || "pt-BR",
     maxMemoryItems: parseInt(process.env.MAX_MEMORY_ITEMS || "1000"),
     conversationHistoryLimit: parseInt(
