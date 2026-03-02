@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { logger } from "./config/logger.js";
 import { query } from "./memory/database.js";
 import { config } from "./config/env.js";
+import { configGet } from "./memory/config-store.js";
 import { verifyAgentToken, type AgentTokenPayload } from "./subagent/agent-token.js";
 import type { MemoryService } from "./memory/memory-service.js";
 import type { VectorMemoryService } from "./memory/vector-memory-service.js";
@@ -279,6 +280,21 @@ export function startHealthServer(port: number): void {
       const agentSession = authenticateAgentRequest(req, res);
       if (!agentSession) return;
       await handleAgentApi(req, res, agentSession);
+      return;
+    }
+
+    // ==================== PUBLIC IDENTITY (no auth) ====================
+    // Returns the agent's display name and logo so the login screen can show
+    // the correct branding on the very first visit (before localStorage is populated).
+    if (req.url === "/api/identity" && req.method === "GET") {
+      try {
+        const logo = await configGet("AGENT_LOGO") || "";
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ name: config.agentName, logo }));
+      } catch {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ name: config.agentName || "Rick", logo: "" }));
+      }
       return;
     }
 
