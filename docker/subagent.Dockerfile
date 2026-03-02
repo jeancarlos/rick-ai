@@ -13,7 +13,9 @@ RUN useradd -m -u 1001 -s /bin/bash agent \
     && mkdir -p /app \
     && chown -R agent:agent /app
 
-# Copy agent entry point
+# Copy agent entry point and shared modules
+COPY docker/tools.mjs /app/tools.mjs
+COPY docker/tool-declarations.mjs /app/tool-declarations.mjs
 COPY docker/agent.mjs /app/agent.mjs
 RUN chown -R agent:agent /app
 

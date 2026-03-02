@@ -22,15 +22,9 @@
  */
 
 import { spawn } from "child_process";
-import {
-  readFileSync,
-  writeFileSync,
-  readdirSync,
-  statSync,
-  existsSync,
-  mkdirSync,
-} from "fs";
-import { join, relative } from "path";
+import { readFileSync, writeFileSync, existsSync } from "fs";
+import { WORKSPACE, listWorkspace, executeTool } from "./tools.mjs";
+import { coreToolDeclarations } from "./tool-declarations.mjs";
 
 // ── Provider detection (priority order) ─────────────────────────────────────
 const hasClaude = !!(
@@ -102,145 +96,8 @@ function saveHistory(messages) {
   try { writeFileSync(HISTORY_FILE, JSON.stringify(messages, null, 2), "utf-8"); } catch {}
 }
 
-// ── Workspace file tools ─────────────────────────────────────────────────────
-const WORKSPACE = "/workspace";
-
-function resolvePath(p) {
-  if (!p) return WORKSPACE;
-  return p.startsWith("/") ? p : join(WORKSPACE, p);
-}
-
-function listWorkspace(dir, depth = 0) {
-  if (depth > 3) return [];
-  try {
-    return readdirSync(dir).flatMap((entry) => {
-      if (entry === "node_modules" || entry.startsWith(".")) return [];
-      const fp = join(dir, entry);
-      try {
-        const st = statSync(fp);
-        const rel = relative(WORKSPACE, fp);
-        if (st.isDirectory()) return [rel + "/", ...listWorkspace(fp, depth + 1)];
-        return [rel];
-      } catch { return []; }
-    });
-  } catch { return []; }
-}
-
-async function executeTool(name, input) {
-  const { execFile } = await import("child_process");
-  const { promisify } = await import("util");
-  const execFileAsync = promisify(execFile);
-
-  switch (name) {
-    case "read_file": {
-      const fp = resolvePath(input.path);
-      try { return readFileSync(fp, "utf-8"); }
-      catch (e) { return `Erro ao ler arquivo: ${e.message}`; }
-    }
-    case "write_file": {
-      const fp = resolvePath(input.path);
-      try {
-        const dir = fp.substring(0, fp.lastIndexOf("/"));
-        if (dir) mkdirSync(dir, { recursive: true });
-        writeFileSync(fp, input.content ?? "", "utf-8");
-        return `Arquivo escrito: ${fp}`;
-      } catch (e) { return `Erro ao escrever arquivo: ${e.message}`; }
-    }
-    case "edit_file": {
-      const fp = resolvePath(input.path);
-      try {
-        let content = readFileSync(fp, "utf-8");
-        if (!content.includes(input.old_string)) {
-          return `Erro: old_string não encontrado em ${fp}`;
-        }
-        content = content.replace(input.old_string, input.new_string);
-        writeFileSync(fp, content, "utf-8");
-        return `Arquivo editado: ${fp}`;
-      } catch (e) { return `Erro ao editar arquivo: ${e.message}`; }
-    }
-    case "list_directory": {
-      const dp = resolvePath(input.path);
-      const entries = listWorkspace(dp);
-      return entries.length ? entries.join("\n") : "(diretório vazio)";
-    }
-    case "run_command": {
-      try {
-        const { stdout, stderr } = await execFileAsync(
-          input.command,
-          input.args ?? [],
-          { cwd: WORKSPACE, timeout: 60_000 }
-        );
-        return (stdout || "") + (stderr ? `\nSTDERR: ${stderr}` : "");
-      } catch (e) {
-        return `Saída ${e.code ?? 1}:\n${e.stdout ?? ""}\n${e.stderr ?? ""}`.trim();
-      }
-    }
-    default:
-      return `Ferramenta desconhecida: ${name}`;
-  }
-}
-
-// Tool declarations (shared between OpenAI and Gemini adapters)
-const toolDeclarations = [
-  {
-    name: "read_file",
-    description: "Lê o conteúdo de um arquivo do workspace",
-    parameters: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "Caminho relativo a /workspace ou absoluto" },
-      },
-      required: ["path"],
-    },
-  },
-  {
-    name: "write_file",
-    description: "Escreve conteúdo em um arquivo (cria se não existir)",
-    parameters: {
-      type: "object",
-      properties: {
-        path: { type: "string" },
-        content: { type: "string" },
-      },
-      required: ["path", "content"],
-    },
-  },
-  {
-    name: "edit_file",
-    description: "Substitui uma string exata em um arquivo (primeira ocorrência)",
-    parameters: {
-      type: "object",
-      properties: {
-        path: { type: "string" },
-        old_string: { type: "string", description: "String exata a ser substituída" },
-        new_string: { type: "string", description: "String de substituição" },
-      },
-      required: ["path", "old_string", "new_string"],
-    },
-  },
-  {
-    name: "list_directory",
-    description: "Lista arquivos do workspace recursivamente",
-    parameters: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "Diretório a listar (padrão: /workspace)" },
-      },
-    },
-  },
-  {
-    name: "run_command",
-    description: "Executa um comando no /workspace (ex: npx tsc --noEmit)",
-    parameters: {
-      type: "object",
-      properties: {
-        command: { type: "string" },
-        args: { type: "array", items: { type: "string" } },
-      },
-      required: ["command"],
-    },
-  },
-];
+// ── Tool declarations (use shared core set) ─────────────────────────────────
+const toolDeclarations = coreToolDeclarations;
 
 // ── Generic agentic loop (Strategy pattern) ──────────────────────────────────
 /**
@@ -279,16 +136,6 @@ async function agenticLoop(adapter) {
   }
 
   adapter.persistHistory(state);
-}
-
-async function runOpenAI(history, userContent) {
-  await agenticLoop(makeOpenAIAdapter(history, userContent));
-  emitResult("Tarefa concluida pelo GPT.");
-}
-
-async function runGemini(history, userContent) {
-  await agenticLoop(makeGeminiAdapter(history, userContent));
-  emitResult("Tarefa concluida pelo Gemini Pro.");
 }
 
 // ── OpenAI adapter ───────────────────────────────────────────────────────────
@@ -341,7 +188,7 @@ function makeOpenAIAdapter(history, userContent) {
       return {
         texts: msg.content ? [msg.content] : [],
         toolCalls,
-        done: choice.finish_reason === "stop" && toolCalls.length === 0,
+        done: toolCalls.length === 0,
         nextState,
       };
     },
@@ -427,13 +274,23 @@ function makeGeminiAdapter(history, userContent) {
         contents
           .map((c) => ({
             role: c.role === "model" ? "assistant" : "user",
-            content: c.parts.map((p) => p.text ?? "").join(""),
+            content: c.parts
+              .map((p) => {
+                if (p.text) return p.text;
+                if (p.functionCall) return `[Tool: ${p.functionCall.name}(${JSON.stringify(p.functionCall.args ?? {})})]`;
+                if (p.functionResponse) return `[Result: ${p.functionResponse.name} → ${JSON.stringify(p.functionResponse.response?.result ?? "").slice(0, 500)}]`;
+                return "";
+              })
+              .filter(Boolean)
+              .join("\n"),
           }))
           .filter((m) => m.content)
       );
     },
   };
 }
+
+// ── Claude raw passthrough ──────────────────────────────────────────────────
 
 async function runClaudeRaw() {
   return await new Promise((resolve) => {
@@ -468,42 +325,48 @@ const fileList = listWorkspace(WORKSPACE).join("\n") || "(workspace vazio)";
 const userContent = `Arquivos disponíveis no workspace:\n${fileList}\n\n---\n\n${prompt}`;
 const errors = [];
 
-if (hasClaude) {
-  const claude = await runClaudeRaw();
-  if (claude.ok) {
-    process.exit(0);
-  }
-  // If Claude produced output and then failed, preserve that failure and stop.
-  if (claude.hadStdout) {
-    process.exit(claude.code || 1);
-  }
-  errors.push(`Claude CLI saiu com code ${claude.code || 1}`);
-}
+// Provider cascade: Claude CLI → OpenAI → Gemini
+const providers = [
+  hasClaude && {
+    name: "Claude",
+    async run() {
+      const claude = await runClaudeRaw();
+      if (claude.ok) process.exit(0);
+      // If Claude produced output and then failed, preserve that failure and stop.
+      if (claude.hadStdout) process.exit(claude.code || 1);
+      throw new Error(`Claude CLI saiu com code ${claude.code || 1}`);
+    },
+  },
+  hasOpenAI && {
+    name: "OpenAI",
+    async run() {
+      await agenticLoop(makeOpenAIAdapter(history, userContent));
+      process.exit(0);
+    },
+  },
+  hasGemini && {
+    name: "Gemini",
+    async run() {
+      await agenticLoop(makeGeminiAdapter(history, userContent));
+      process.exit(0);
+    },
+  },
+].filter(Boolean);
 
-if (hasOpenAI) {
-  try {
-    await runOpenAI(history, userContent);
-    process.exit(0);
-  } catch (err) {
-    errors.push(err?.message || String(err));
-  }
-}
-
-if (hasGemini) {
-  try {
-    await runGemini(history, userContent);
-    process.exit(0);
-  } catch (err) {
-    errors.push(err?.message || String(err));
-  }
-}
-
-if (!hasClaude && !hasOpenAI && !hasGemini) {
+if (providers.length === 0) {
   emitError(
-    "Nenhum provedor de LLM disponivel no container. " +
+    "Nenhum provedor de LLM disponível no container. " +
     "Configure CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY ou GEMINI_API_KEY."
   );
   process.exit(1);
+}
+
+for (const provider of providers) {
+  try {
+    await provider.run();
+  } catch (err) {
+    errors.push(err?.message || String(err));
+  }
 }
 
 emitError(`Todos os provedores falharam: ${errors.join(" | ")}`);

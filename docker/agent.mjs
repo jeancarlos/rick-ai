@@ -19,19 +19,8 @@
  */
 
 import { createInterface } from "readline";
-import {
-  readFileSync,
-  writeFileSync,
-  readdirSync,
-  statSync,
-  existsSync,
-  mkdirSync,
-} from "fs";
-import { join, relative } from "path";
-import { execFile } from "child_process";
-import { promisify } from "util";
-
-const execFileAsync = promisify(execFile);
+import { WORKSPACE, listWorkspace, executeTool, toolStatusLabel } from "./tools.mjs";
+import { coreToolDeclarations } from "./tool-declarations.mjs";
 
 // ── NDJSON helpers ──────────────────────────────────────────────────────────
 
@@ -65,10 +54,10 @@ const hasGemini = !!process.env.GEMINI_API_KEY;
 const hasOpenAI = !!(process.env.OPENAI_API_KEY || process.env.OPENAI_ACCESS_TOKEN);
 const hasClaude = !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_ACCESS_TOKEN);
 
-const providers = [];
-if (hasClaude) providers.push("claude");
-if (hasOpenAI) providers.push("openai");
-if (hasGemini) providers.push("gemini");
+const providerList = [];
+if (hasClaude) providerList.push("claude");
+if (hasOpenAI) providerList.push("openai");
+if (hasGemini) providerList.push("gemini");
 
 // ── Rick API client (for querying memories/credentials) ─────────────────────
 
@@ -77,7 +66,7 @@ const RICK_SESSION_TOKEN = process.env.RICK_SESSION_TOKEN || "";
 
 async function rickApiGet(path) {
   if (!RICK_API_URL || !RICK_SESSION_TOKEN) {
-    emitStatus("rick_memory/rick_search indisponivel: RICK_API_URL ou RICK_SESSION_TOKEN nao configurado");
+    emitStatus("rick_memory/rick_search indisponível: RICK_API_URL ou RICK_SESSION_TOKEN não configurado");
     return null;
   }
   try {
@@ -96,81 +85,14 @@ async function rickApiGet(path) {
   }
 }
 
-// ── Tool implementations ────────────────────────────────────────────────────
+// ── Agent-specific tool handler (web_fetch, rick_memory, rick_search) ────────
 
-const WORKSPACE = "/workspace";
-
-function resolvePath(p) {
-  if (!p) return WORKSPACE;
-  return p.startsWith("/") ? p : join(WORKSPACE, p);
-}
-
-function listWorkspace(dir, depth = 0) {
-  if (depth > 3) return [];
-  try {
-    return readdirSync(dir).flatMap((entry) => {
-      if (entry === "node_modules" || entry.startsWith(".")) return [];
-      const fp = join(dir, entry);
-      try {
-        const st = statSync(fp);
-        const rel = relative(WORKSPACE, fp);
-        if (st.isDirectory()) return [rel + "/", ...listWorkspace(fp, depth + 1)];
-        return [rel];
-      } catch { return []; }
-    });
-  } catch { return []; }
-}
-
-async function executeTool(name, input) {
+async function agentToolHandler(name, input) {
   switch (name) {
-    case "read_file": {
-      const fp = resolvePath(input.path);
-      try { return readFileSync(fp, "utf-8"); }
-      catch (e) { return `Erro ao ler arquivo: ${e.message}`; }
-    }
-    case "write_file": {
-      const fp = resolvePath(input.path);
-      try {
-        const dir = fp.substring(0, fp.lastIndexOf("/"));
-        if (dir) mkdirSync(dir, { recursive: true });
-        writeFileSync(fp, input.content ?? "", "utf-8");
-        return `Arquivo escrito: ${fp}`;
-      } catch (e) { return `Erro ao escrever arquivo: ${e.message}`; }
-    }
-    case "edit_file": {
-      const fp = resolvePath(input.path);
-      try {
-        let content = readFileSync(fp, "utf-8");
-        if (!content.includes(input.old_string)) {
-          return `Erro: old_string nao encontrado em ${fp}`;
-        }
-        content = content.replace(input.old_string, input.new_string);
-        writeFileSync(fp, content, "utf-8");
-        return `Arquivo editado: ${fp}`;
-      } catch (e) { return `Erro ao editar arquivo: ${e.message}`; }
-    }
-    case "list_directory": {
-      const dp = resolvePath(input.path);
-      const entries = listWorkspace(dp);
-      return entries.length ? entries.join("\n") : "(diretorio vazio)";
-    }
-    case "run_command": {
-      try {
-        const { stdout, stderr } = await execFileAsync(
-          input.command,
-          input.args ?? [],
-          { cwd: WORKSPACE, timeout: 120_000 }
-        );
-        return (stdout || "") + (stderr ? `\nSTDERR: ${stderr}` : "");
-      } catch (e) {
-        return `Saida ${e.code ?? 1}:\n${e.stdout ?? ""}\n${e.stderr ?? ""}`.trim();
-      }
-    }
     case "web_fetch": {
       try {
         const res = await fetch(input.url, { signal: AbortSignal.timeout(15000) });
         const text = await res.text();
-        // Truncate large responses
         return text.length > 20000 ? text.substring(0, 20000) + "\n...(truncado)" : text;
       } catch (e) {
         return `Erro ao acessar ${input.url}: ${e.message}`;
@@ -178,82 +100,34 @@ async function executeTool(name, input) {
     }
     case "rick_memory": {
       const data = await rickApiGet(`/api/agent/memories${input.category ? `?category=${encodeURIComponent(input.category)}` : ""}`);
-      if (!data) return "Nao foi possivel acessar as memorias do assistente.";
+      if (!data) return "Não foi possível acessar as memórias do assistente.";
       return JSON.stringify(data.memories || [], null, 2);
     }
     case "rick_search": {
       const data = await rickApiGet(`/api/agent/search?q=${encodeURIComponent(input.query)}&limit=${input.limit || 5}`);
-      if (!data) return "Busca semantica nao disponivel no assistente.";
+      if (!data) return "Busca semântica não disponível no assistente.";
       return JSON.stringify(data.results || [], null, 2);
     }
     default:
-      return `Ferramenta desconhecida: ${name}`;
+      return undefined; // fall through to "unknown tool"
   }
+}
+
+/** Wrapper that routes to shared tools + agent-specific tools */
+async function runTool(name, input) {
+  return executeTool(name, input, agentToolHandler);
 }
 
 // ── Agent name (used in tool descriptions and system prompt) ────────────────
 const agentName = process.env.AGENT_NAME || "Rick";
 
-// ── Tool declarations ───────────────────────────────────────────────────────
+// ── Tool declarations (core + agent-specific) ───────────────────────────────
 
 const toolDeclarations = [
-  {
-    name: "read_file",
-    description: "Le o conteudo de um arquivo",
-    parameters: {
-      type: "object",
-      properties: { path: { type: "string", description: "Caminho do arquivo" } },
-      required: ["path"],
-    },
-  },
-  {
-    name: "write_file",
-    description: "Escreve conteudo em um arquivo (cria se nao existir)",
-    parameters: {
-      type: "object",
-      properties: {
-        path: { type: "string" },
-        content: { type: "string" },
-      },
-      required: ["path", "content"],
-    },
-  },
-  {
-    name: "edit_file",
-    description: "Substitui uma string exata em um arquivo (primeira ocorrencia)",
-    parameters: {
-      type: "object",
-      properties: {
-        path: { type: "string" },
-        old_string: { type: "string", description: "String exata a ser substituida" },
-        new_string: { type: "string", description: "String de substituicao" },
-      },
-      required: ["path", "old_string", "new_string"],
-    },
-  },
-  {
-    name: "list_directory",
-    description: "Lista arquivos de um diretorio recursivamente",
-    parameters: {
-      type: "object",
-      properties: { path: { type: "string", description: "Diretorio (padrao: /workspace)" } },
-    },
-  },
-  {
-    name: "run_command",
-    description: "Executa um comando shell (ex: git clone, npm install, curl)",
-    parameters: {
-      type: "object",
-      properties: {
-        command: { type: "string" },
-        args: { type: "array", items: { type: "string" } },
-      },
-      required: ["command"],
-    },
-  },
+  ...coreToolDeclarations,
   {
     name: "web_fetch",
-    description: "Faz uma requisicao HTTP GET e retorna o conteudo da pagina",
+    description: "Faz uma requisição HTTP GET e retorna o conteúdo da página",
     parameters: {
       type: "object",
       properties: { url: { type: "string", description: "URL para acessar" } },
@@ -262,20 +136,20 @@ const toolDeclarations = [
   },
   {
     name: "rick_memory",
-    description: `Lista memorias salvas pelo ${agentName} (credenciais, links, preferencias, informacoes do usuario). Sem categoria retorna TODAS as memorias. USE ESTA FERRAMENTA PRIMEIRO quando precisar de informacoes que o usuario ja tenha ensinado.`,
+    description: `Lista memórias salvas pelo ${agentName} (credenciais, links, preferências, informações do usuário). Sem categoria retorna TODAS as memórias. USE ESTA FERRAMENTA PRIMEIRO quando precisar de informações que o usuário já tenha ensinado.`,
     parameters: {
       type: "object",
-      properties: { category: { type: "string", description: "Categoria opcional para filtrar. Categorias comuns: credenciais, senhas, geral, pessoal, notas, preferencias. Omita para listar TODAS." } },
+      properties: { category: { type: "string", description: "Categoria opcional para filtrar. Categorias comuns: credenciais, senhas, geral, pessoal, notas, preferências. Omita para listar TODAS." } },
     },
   },
   {
     name: "rick_search",
-    description: `Busca semantica nas conversas e memorias do ${agentName}. Use quando precisar encontrar algo especifico por significado (ex: 'repositorio zydon', 'email do cliente').`,
+    description: `Busca semântica nas conversas e memórias do ${agentName}. Use quando precisar encontrar algo específico por significado (ex: 'repositório zydon', 'email do cliente').`,
     parameters: {
       type: "object",
       properties: {
         query: { type: "string", description: "Texto para buscar por significado" },
-        limit: { type: "number", description: "Numero maximo de resultados (padrao: 5)" },
+        limit: { type: "number", description: "Número máximo de resultados (padrão: 5)" },
       },
       required: ["query"],
     },
@@ -285,26 +159,31 @@ const toolDeclarations = [
 const toolNames = toolDeclarations.map((t) => t.name);
 
 // ── System prompt ───────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `Voce e ${agentName} Sub-Agent, um agente autonomo executando dentro de um container Docker.
+const SYSTEM_PROMPT = `Você é ${agentName} Sub-Agent, um agente autônomo executando dentro de um container Docker.
 
-Sua tarefa e realizar o que o usuario pedir usando as ferramentas disponiveis.
-Voce mantem o contexto de toda a conversa — mensagens anteriores do usuario sao lembradas.
+Sua tarefa é realizar o que o usuário pedir usando as ferramentas disponíveis.
+Você mantém o contexto de toda a conversa — mensagens anteriores do usuário são lembradas.
 
 REGRAS:
-1. Responda sempre em portugues brasileiro.
-2. Use as ferramentas para completar a tarefa. NAO invente resultados.
+1. Responda sempre em português brasileiro.
+2. Use as ferramentas para completar a tarefa. NÃO invente resultados.
 3. Quando terminar uma etapa, emita um resumo claro do que foi feito.
-4. Se precisar de informacoes adicionais, PERGUNTE DIRETAMENTE ao usuario (ex: "Qual a URL do repositorio?") — voce recebera a resposta na proxima mensagem. Fale sempre em segunda pessoa, direto com o usuario.
-5. Se precisar de informacoes que o usuario ja ensinou ao ${agentName} (credenciais, links de repositorios, preferencias), use rick_memory (sem categoria para ver TUDO) ou rick_search (busca por significado).
-6. SEMPRE consulte rick_memory antes de pedir informacoes ao usuario — a resposta pode ja estar la.
-7. Credenciais estao disponiveis como variaveis de ambiente RICK_SECRET_* e GITHUB_TOKEN no container. Use \`run_command env\` para listar TODAS as variaveis disponiveis.
-8. Para clonar repositorios Git PRIVADOS, use o GITHUB_TOKEN: \`git clone https://\${GITHUB_TOKEN}@github.com/org/repo.git\`. SEMPRE tente com o token antes de dizer que nao tem acesso.
-9. Para tarefas de codigo: clone o repositorio, faca as alteracoes, rode testes se possivel.
-10. Para pesquisa web: use web_fetch para acessar URLs e extrair informacoes.
-11. Seja conciso nas mensagens intermediarias, detalhado no resultado final.
-12. Quando o usuario mencionar um projeto ou repositorio por nome, consulte rick_memory ou rick_search para descobrir a URL antes de perguntar.
+4. Se precisar de informações adicionais, PERGUNTE DIRETAMENTE ao usuário (ex: "Qual a URL do repositório?") — você receberá a resposta na próxima mensagem. Fale sempre em segunda pessoa, direto com o usuário.
+5. Se precisar de informações que o usuário já ensinou ao ${agentName} (credenciais, links de repositórios, preferências), use rick_memory (sem categoria para ver TUDO) ou rick_search (busca por significado).
+6. SEMPRE consulte rick_memory antes de pedir informações ao usuário — a resposta pode já estar lá.
+7. Credenciais estão disponíveis como variáveis de ambiente RICK_SECRET_* e GITHUB_TOKEN no container. Use \`run_command env\` para listar TODAS as variáveis disponíveis.
+8. Para clonar repositórios Git PRIVADOS, use o GITHUB_TOKEN: \`git clone https://\${GITHUB_TOKEN}@github.com/org/repo.git\`. SEMPRE tente com o token antes de dizer que não tem acesso.
+9. Para tarefas de código: clone o repositório, faça as alterações, rode testes se possível.
+10. Para pesquisa web: use web_fetch para acessar URLs e extrair informações.
+11. Seja conciso nas mensagens intermediárias, detalhado no resultado final.
+12. Quando o usuário mencionar um projeto ou repositório por nome, consulte rick_memory ou rick_search para descobrir a URL antes de perguntar.
 
-FERRAMENTAS DISPONIVEIS: ${toolNames.join(", ")}`;
+FERRAMENTAS DISPONÍVEIS: ${toolNames.join(", ")}`;
+
+// ── Constants ───────────────────────────────────────────────────────────────
+
+const MAX_ITER = 30; // Safety limit — prevent runaway API loops
+const FALLBACK_RESULT = "Tarefa concluída.";
 
 // ── Gemini adapter ──────────────────────────────────────────────────────────
 
@@ -352,7 +231,7 @@ async function runGeminiLoop(userText) {
   geminiHistory.push({ role: "user", parts: [{ text: userText }] });
   let contents = geminiHistory;
 
-  while (true) {
+  for (let iter = 0; iter < MAX_ITER; iter++) {
     const { texts, toolCalls, modelParts } = await callGemini(contents);
     contents.push({ role: "model", parts: modelParts });
 
@@ -361,15 +240,13 @@ async function runGeminiLoop(userText) {
     }
 
     if (toolCalls.length === 0) {
-      // No more tool calls — done
-      return texts.join("\n") || "Tarefa concluida.";
+      return texts.join("\n") || FALLBACK_RESULT;
     }
 
-    // Execute tools
     const toolResults = [];
     for (const tc of toolCalls) {
-      emitStatus(`Executando: ${tc.name}${tc.input.path ? ` (${tc.input.path})` : tc.input.url ? ` (${tc.input.url})` : tc.input.command ? ` (${tc.input.command})` : ""}`);
-      const result = await executeTool(tc.name, tc.input);
+      emitStatus(toolStatusLabel(tc.name, tc.input));
+      const result = await runTool(tc.name, tc.input);
       toolResults.push({ name: tc.name, result: String(result) });
     }
 
@@ -399,7 +276,7 @@ async function runOpenAILoop(userText) {
   openaiHistory.push({ role: "user", content: userText });
   let messages = openaiHistory;
 
-  while (true) {
+  for (let iter = 0; iter < MAX_ITER; iter++) {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -429,12 +306,12 @@ async function runOpenAILoop(userText) {
     }));
 
     if (toolCalls.length === 0) {
-      return msg.content || "Tarefa concluida.";
+      return msg.content || FALLBACK_RESULT;
     }
 
     for (const tc of toolCalls) {
-      emitStatus(`Executando: ${tc.name}`);
-      const result = await executeTool(tc.name, tc.input);
+      emitStatus(toolStatusLabel(tc.name, tc.input));
+      const result = await runTool(tc.name, tc.input);
       messages.push({ role: "tool", tool_call_id: tc.id, content: String(result) });
     }
   }
@@ -454,7 +331,7 @@ async function runClaudeLoop(userText) {
   claudeHistory.push({ role: "user", content: userText });
   let messages = claudeHistory;
 
-  while (true) {
+  for (let iter = 0; iter < MAX_ITER; iter++) {
     const headers = {
       "Content-Type": "application/json",
       "anthropic-version": "2023-06-01",
@@ -492,14 +369,14 @@ async function runClaudeLoop(userText) {
       emitMessage(tb.text);
     }
 
-    if (toolBlocks.length === 0 || data.stop_reason === "end_turn") {
-      return textBlocks.map((b) => b.text).join("\n") || "Tarefa concluida.";
+    if (toolBlocks.length === 0) {
+      return textBlocks.map((b) => b.text).join("\n") || FALLBACK_RESULT;
     }
 
     const toolResults = [];
     for (const tb of toolBlocks) {
-      emitStatus(`Executando: ${tb.name}`);
-      const result = await executeTool(tb.name, tb.input);
+      emitStatus(toolStatusLabel(tb.name, tb.input));
+      const result = await runTool(tb.name, tb.input);
       toolResults.push({ type: "tool_result", tool_use_id: tb.id, content: String(result) });
     }
 
@@ -509,13 +386,13 @@ async function runClaudeLoop(userText) {
 
 // ── Main: stdin/stdout event loop ───────────────────────────────────────────
 
-if (providers.length === 0) {
-  emitError("Nenhum provedor de LLM disponivel. Configure GEMINI_API_KEY, OPENAI_API_KEY, ou ANTHROPIC_API_KEY.");
+if (providerList.length === 0) {
+  emitError("Nenhum provedor de LLM disponível. Configure GEMINI_API_KEY, OPENAI_API_KEY, ou ANTHROPIC_API_KEY.");
   process.exit(1);
 }
 
 // Emit ready signal
-emit({ type: "ready", providers, tools: toolNames });
+emit({ type: "ready", providers: providerList, tools: toolNames });
 
 // Read messages from stdin (NDJSON, one per line)
 const rl = createInterface({ input: process.stdin, terminal: false });
@@ -560,21 +437,32 @@ rl.on("line", async (line) => {
 
   const userText = msg.text;
 
-  try {
-    let result;
-    if (hasClaude) {
-      result = await runClaudeLoop(userText);
-    } else if (hasOpenAI) {
-      result = await runOpenAILoop(userText);
-    } else if (hasGemini) {
-      result = await runGeminiLoop(userText);
-    }
+  // Provider cascade: try each configured provider in priority order.
+  // If a provider fails, fall through to the next one instead of killing the turn.
+  const cascade = [];
+  if (hasClaude) cascade.push({ name: "Claude", fn: runClaudeLoop });
+  if (hasOpenAI) cascade.push({ name: "OpenAI", fn: runOpenAILoop });
+  if (hasGemini) cascade.push({ name: "Gemini", fn: runGeminiLoop });
 
+  let result;
+  let lastErr;
+  for (const provider of cascade) {
+    try {
+      result = await provider.fn(userText);
+      lastErr = null;
+      break;
+    } catch (err) {
+      lastErr = err;
+      process.stderr.write(`Provedor ${provider.name} falhou: ${err.message}\n`);
+    }
+  }
+
+  if (lastErr) {
+    emitError(lastErr.message || "Erro desconhecido no sub-agente.");
+  } else {
     // Signal that we're done processing this turn but ready for more input.
     // The session stays alive — the host will show the compose bar again.
     emitWaitingUser(result);
-  } catch (err) {
-    emitError(err.message || "Erro desconhecido no sub-agente.");
   }
 });
 

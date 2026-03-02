@@ -16,7 +16,9 @@ RUN useradd -m -u 1001 -s /bin/bash claude \
     && mkdir -p /home/claude/.claude \
     && chown -R claude:claude /home/claude/.claude
 
-# Copy multi-provider edit agent script
+# Copy edit agent entry point and shared modules
+COPY docker/tools.mjs /app/tools.mjs
+COPY docker/tool-declarations.mjs /app/tool-declarations.mjs
 COPY docker/edit-agent.mjs /app/edit-agent.mjs
 RUN chown -R claude:claude /app
 

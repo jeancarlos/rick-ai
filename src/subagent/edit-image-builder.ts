@@ -15,12 +15,18 @@ class EditImageBuilder {
   private getLocalFingerprint(): { hash: string; version: string; fingerprint: string; dockerfilePath: string; localAppDir: string } {
     const localAppDir = process.cwd();
     const editAgentPath = `${localAppDir}/docker/edit-agent.mjs`;
+    const sharedToolsPath = `${localAppDir}/docker/tools.mjs`;
+    const sharedDeclsPath = `${localAppDir}/docker/tool-declarations.mjs`;
     const dockerfilePath = `${localAppDir}/docker/subagent-edit.Dockerfile`;
     const versionFilePath = `${localAppDir}/.rick-version`;
     const packageJsonPath = `${localAppDir}/package.json`;
 
     const hash = createHash("sha256")
       .update(readFileSync(editAgentPath))
+      .update("\n---\n")
+      .update(readFileSync(sharedToolsPath))
+      .update("\n---\n")
+      .update(readFileSync(sharedDeclsPath))
       .update("\n---\n")
       .update(readFileSync(dockerfilePath))
       .digest("hex")
