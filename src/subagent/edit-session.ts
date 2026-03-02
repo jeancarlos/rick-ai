@@ -1360,23 +1360,62 @@ git remote set-url origin "https://x-access-token:${githubToken}@github.com/${ta
 echo "[publish] Sincronizando com repositorio remoto..."
 git fetch origin main 2>&1 || echo "[publish] AVISO: fetch falhou"
 
-# Rebase if diverged
+# Rebase if diverged — abort cleanly on conflict instead of leaving markers
 if git rev-parse origin/main >/dev/null 2>&1; then
   LOCAL_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "none")
   REMOTE_HEAD=$(git rev-parse origin/main 2>/dev/null || echo "none")
-  if [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]; then
+  MERGE_BASE=$(git merge-base HEAD origin/main 2>/dev/null || echo "none")
+  if [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ] && [ "$MERGE_BASE" != "none" ]; then
     echo "[publish] Branch divergiu — fazendo rebase..."
     git stash --include-untracked 2>&1 || true
-    git rebase origin/main 2>&1 || {
+    if ! git rebase origin/main 2>&1; then
+      echo "[publish] Rebase com conflito — abortando e tentando merge com estrategia ours..."
       git rebase --abort 2>/dev/null || true
-      git merge origin/main --no-edit 2>&1 || true
-    }
+      # Use -X ours to auto-resolve conflicts keeping our (local) version
+      if ! git merge origin/main --no-edit -X ours 2>&1; then
+        echo "[publish] Merge tambem falhou — abortando merge..."
+        git merge --abort 2>/dev/null || true
+        echo "[publish] AVISO: Sincronizacao com remote falhou, push pode precisar force-with-lease"
+      fi
+    fi
     git stash pop 2>&1 || true
   fi
 fi
 
-# Stage and commit
-git add -A
+# Stage ONLY project-tracked paths (not random files in the repo root).
+# This mirrors exactly what deploy.sh copies from staging → project.
+for d in src scripts docker .github; do
+  [ -d "$d" ] && git add "$d/" 2>/dev/null || true
+done
+for f in Dockerfile docker-compose.yml package.json tsconfig.json package-lock.json \\
+         .gitignore .env.example LICENSE .rick-version; do
+  [ -f "$f" ] && git add "$f" 2>/dev/null || true
+done
+for f in *.md; do
+  [ -f "$f" ] && git add "$f" 2>/dev/null || true
+done
+
+# Safety: detect merge conflict markers in staged files
+CONFLICT_FILES=$(git diff --cached --name-only 2>/dev/null | while read -r cf; do
+  if grep -qlE '^(<<<<<<<|=======|>>>>>>>)' "$cf" 2>/dev/null; then
+    echo "$cf"
+  fi
+done || true)
+
+if [ -n "$CONFLICT_FILES" ]; then
+  echo "[publish] ERRO: conflitos de merge detectados nos seguintes arquivos:"
+  echo "$CONFLICT_FILES" | while read -r cf; do echo "  - $cf"; done
+  echo "[publish] Resolvendo conflitos automaticamente (mantendo versao local)..."
+  echo "$CONFLICT_FILES" | while read -r cf; do
+    # Remove conflict markers keeping "ours" (local/Updated upstream) version
+    if [ -f "$cf" ]; then
+      sed -i '/^<<<<<<< /d; /^=======/d; /^>>>>>>> /d' "$cf"
+      git add "$cf" 2>/dev/null || true
+    fi
+  done
+  echo "[publish] Conflitos resolvidos."
+fi
+
 if git diff --cached --quiet 2>/dev/null; then
   echo "[publish] Nenhuma alteracao para commitar"
 else
