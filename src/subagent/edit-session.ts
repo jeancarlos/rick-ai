@@ -906,20 +906,20 @@ export class EditSession {
           setTimeout(() => this.runClaude(args, true), 2000);
           return;
         } else {
-          if (totalOutput === 0) {
-            if (code !== 0) {
-              // Retry already failed — show diagnostic info
-              const hint = stderrText
-                ? stderrText.slice(0, 200)
-                : `exit code ${code}`;
-              logger.error(
-                { sessionId: this.id, exitCode: code, stderr: stderrText.slice(0, 500) },
-                "Edit session: Claude Code crashed after retry"
-              );
-              await this.sendMessage(`_Claude Code falhou (${hint}). Tente enviar a mensagem novamente._`);
-            } else {
-              await this.sendMessage("_(sem output)_");
-            }
+          if (code !== 0) {
+            // Always surface a visible error in history, even when there was partial output.
+            const hint = stderrText
+              ? stderrText.slice(0, 200)
+              : `exit code ${code}`;
+            logger.error(
+              { sessionId: this.id, exitCode: code, stderr: stderrText.slice(0, 500), totalOutput },
+              "Edit session: Claude Code failed"
+            );
+            await this.sendMessage(
+              `_Claude Code falhou (${hint}). Nenhuma alteracao foi aplicada nesta tentativa. Tente enviar a mensagem novamente._`
+            );
+          } else if (totalOutput === 0) {
+            await this.sendMessage("_(sem output)_");
           }
           this.state = "ready";
         }
