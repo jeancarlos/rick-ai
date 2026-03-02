@@ -82,6 +82,10 @@ export class Agent {
     this.sessionManager.warmupSubagentImage();
   }
 
+  async expireStaleSessions(): Promise<number> {
+    return this.sessionManager.expireStaleDoneSessions();
+  }
+
   /**
    * Public entry point — serializes per user to prevent race conditions.
    * Two messages from the same user are processed sequentially, never concurrently.

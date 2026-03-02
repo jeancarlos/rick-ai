@@ -199,6 +199,9 @@ class SubagentImageBuilder {
     return CURRENT_IMAGE;
   }
 
+  private warmupRetries = 0;
+  private static readonly MAX_WARMUP_RETRIES = 3;
+
   warmup(reason: string): void {
     let local: ReturnType<typeof this.getLocalFingerprint>;
     try {
@@ -218,8 +221,18 @@ class SubagentImageBuilder {
         logger.info({ reason, imageFingerprint: fp, localFingerprint: local.fingerprint }, "Subagent image warmup starting build");
         return this.startBackgroundBuild(local, reason);
       })
-      .catch((err) => {
-        logger.warn({ err, reason }, "Subagent image warmup failed — scheduling retry in 60s");
+      .catch(async (err) => {
+        this.warmupRetries++;
+        if (this.warmupRetries > SubagentImageBuilder.MAX_WARMUP_RETRIES) {
+          logger.error({ err, reason, retries: this.warmupRetries }, "Subagent image warmup failed — max retries reached, giving up");
+          return;
+        }
+        // Try to free disk space before retrying
+        try {
+          await execFileAsync("docker", ["builder", "prune", "-f"], { timeout: 30_000 });
+          logger.info("Pruned Docker build cache before subagent image retry");
+        } catch { /* best effort */ }
+        logger.warn({ err, reason, retry: this.warmupRetries }, "Subagent image warmup failed — scheduling retry in 60s");
         setTimeout(() => this.warmup(`${reason}_retry`), 60_000);
       });
   }

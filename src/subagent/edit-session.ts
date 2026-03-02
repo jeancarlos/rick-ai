@@ -454,6 +454,10 @@ export class EditSession {
    */
   async start(env: Record<string, string>): Promise<void> {
     this.startEnv = { ...env };
+
+    // Kill any orphaned edit containers from previous sessions before starting
+    await EditSession.cleanupOrphans().catch(() => {});
+
     await this.ensureImageExists();
 
     const projectDir = await getHostProjectDir();

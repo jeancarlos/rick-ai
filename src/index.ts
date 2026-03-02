@@ -16,6 +16,10 @@ import { UserService } from "./auth/user-service.js";
 import { closeVectorPool } from "./memory/vector-db.js";
 import { EditSession } from "./subagent/edit-session.js";
 import { startHealthServer, setHealthy, registerAgentApiServices } from "./health.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 async function main() {
   console.log(`
@@ -163,10 +167,39 @@ async function main() {
     logger.warn({ err }, "Failed to recover orphaned sub-agent sessions on startup");
   });
 
+  // 10c. Periodic Docker cleanup — prevents disk from filling up with dangling images,
+  // build cache, stopped containers, and stale tmp dirs.
+  const DOCKER_CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
+  const STALE_SESSION_INTERVAL = 5 * 60 * 1000;   // 5 minutes
+  const dockerCleanupTimer = setInterval(async () => {
+    try {
+      // Prune stopped containers (not edit-session — those are handled by the reaper)
+      await execFileAsync("docker", ["container", "prune", "-f"], { timeout: 30_000 });
+      // Prune dangling images (old subagent/edit/agent rebuilds)
+      await execFileAsync("docker", ["image", "prune", "-f"], { timeout: 30_000 });
+      // Prune build cache older than 24h
+      await execFileAsync("docker", ["builder", "prune", "-f", "--filter", "until=24h"], { timeout: 30_000 });
+      // Clean stale tmp dirs from failed deploys/imports
+      await execFileAsync("sh", ["-c", "rm -rf /tmp/rick-update-* /tmp/rick-import-* /tmp/rick-publish-* 2>/dev/null || true"], { timeout: 10_000 });
+      logger.info("Periodic Docker cleanup completed");
+    } catch (err) {
+      logger.warn({ err }, "Periodic Docker cleanup failed");
+    }
+  }, DOCKER_CLEANUP_INTERVAL);
+
+  // Proactive stale session expiry — don't rely solely on incoming messages to trigger cleanup
+  const staleSessionTimer = setInterval(() => {
+    agent.expireStaleSessions().catch((err) => {
+      logger.warn({ err }, "Proactive stale session expiry failed");
+    });
+  }, STALE_SESSION_INTERVAL);
+
   // 11. Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info({ signal }, "Shutting down...");
     stopReaper();
+    clearInterval(dockerCleanupTimer);
+    clearInterval(staleSessionTimer);
     diskMonitor?.stop();
     await connectorManager.stopAll();
     await closeDatabase();

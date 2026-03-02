@@ -151,6 +151,9 @@ class EditImageBuilder {
     await this.buildWithLock(local);
   }
 
+  private warmupRetries = 0;
+  private static readonly MAX_WARMUP_RETRIES = 3;
+
   warmup(reason: string): void {
     let local: ReturnType<typeof this.getLocalFingerprint>;
     try {
@@ -170,10 +173,23 @@ class EditImageBuilder {
         }
         logger.info({ reason, imageFingerprint, localFingerprint: local.fingerprint }, "Edit image warmup starting build");
         return this.buildWithLock(local)
-          .then(() => logger.info({ reason }, "Edit image warmup completed"));
+          .then(() => {
+            this.warmupRetries = 0;
+            logger.info({ reason }, "Edit image warmup completed");
+          });
       })
-      .catch((err) => {
-        logger.warn({ err, reason }, "Edit image warmup failed — scheduling retry in 60s");
+      .catch(async (err) => {
+        this.warmupRetries++;
+        if (this.warmupRetries > EditImageBuilder.MAX_WARMUP_RETRIES) {
+          logger.error({ err, reason, retries: this.warmupRetries }, "Edit image warmup failed — max retries reached, giving up");
+          return;
+        }
+        // Try to free disk space before retrying
+        try {
+          await execFileAsync("docker", ["builder", "prune", "-f"], { timeout: 30_000 });
+          logger.info("Pruned Docker build cache before edit image retry");
+        } catch { /* best effort */ }
+        logger.warn({ err, reason, retry: this.warmupRetries }, "Edit image warmup failed — scheduling retry in 60s");
         setTimeout(() => this.warmup(`${reason}_retry`), 60_000);
       });
   }

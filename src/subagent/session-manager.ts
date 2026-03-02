@@ -337,6 +337,8 @@ export class SessionManager {
       logger.error({ err, sessionId: id }, "Failed to start sub-agent container");
       session.state = "killed";
       this.sessions.delete(id);
+      // Clean up container if it was partially created
+      execFileAsync("docker", ["rm", "-f", session.containerName]).catch(() => {});
       // Update DB status
       this.updateSessionStatus(id, "killed").catch(() => {});
       throw err;
@@ -606,6 +608,9 @@ export class SessionManager {
           this.onSessionMessage(session.id, "system", JSON.stringify({ state: "done" }), "system");
         }
         this.updateSessionStatus(session.id, "done").catch(() => {});
+
+        // Kill the container immediately — no reason to keep it running after process exits
+        execFileAsync("docker", ["rm", "-f", session.containerName]).catch(() => {});
       }
     });
 
