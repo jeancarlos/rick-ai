@@ -27,7 +27,7 @@ Built on Oracle Cloud Always Free VMs, Rick orchestrates multiple LLM providers 
      │        (Claude/GPT)         (RBAC)
      ▼                                  │
   Unified Sub-Agent Container           │
-  (Claude→GPT→Gemini Pro→Flash)         │
+  (Claude→GPT→Gemini 3.1 Pro)           │
   (Browser + Shell + Files + DB)        │
 ```
 
@@ -81,11 +81,10 @@ Connectors are managed by the `ConnectorManager`, which routes messages bidirect
 
 | Model | Provider | Used For |
 |-------|----------|----------|
-| Gemini 3 Flash Preview | Google | Default chat, classifier, audio transcription, memory extraction |
+| Gemini 3.0 Flash | Google | Default chat, classifier, audio transcription, memory extraction |
 | Claude Opus 4.6 | Anthropic | Sub-agent primary (via OAuth), edit mode |
 | GPT-5.3 Codex | OpenAI | Sub-agent fallback (via OAuth) |
-| Gemini 3.1 Pro Preview | Google | Sub-agent fallback |
-| Gemini 3 Flash Preview | Google | Sub-agent last resort |
+| Gemini 3.1 Pro | Google | Sub-agent fallback |
 
 No API keys needed for Claude or GPT — Rick uses OAuth 2.0 + PKCE to connect via your existing Pro/Max subscriptions. API key fallback models (`claude-opus-4-6`, `gpt-5.3-codex`) are used when OAuth is not configured.
 
@@ -117,13 +116,14 @@ Tables are automatically pruned to prevent unbounded growth:
 
 All delegated tasks (coding, research, browser automation) are handled by a **single unified sub-agent** container with:
 
-- **LLM cascade**: Claude Opus 4.6 → GPT-5.3 Codex → Gemini 3.1 Pro → Gemini Flash (automatic failover on rate limits or errors)
+- **LLM cascade**: Claude Opus 4.6 → GPT-5.3 Codex → Gemini 3.1 Pro (automatic failover on rate limits or errors)
 - **Tools**: Browser (Playwright + headless Chromium), shell commands, file I/O, HTTP fetch, read-only PostgreSQL access
 - **NDJSON protocol**: stdin/stdout communication with the main Rick process for real-time streaming
 - **Context rotation**: Automatic summarization when context window fills up
 - **Credential injection**: OAuth tokens and stored passwords injected at runtime (never in task descriptions). Sensitive memories are pre-resolved and injected as `RICK_SECRET_*` env vars (decrypted, no encryption key exposed).
 - **Agent API access**: Each sub-agent receives a signed JWT (`RICK_SESSION_TOKEN`) and API URL (`RICK_API_URL`) to query Rick's read-only API for memories, credentials, semantic search, conversations, and config — all scoped to the owner's data.
 - **Session recovery**: Running containers are recovered after Rick restarts
+- **Image freshness**: `subagent` image is rebuilt automatically whenever bundle hash or Rick version label differs (no stale image reuse across versions)
 
 Each sub-agent gets a unique Rick variant name (Rick Prime, Pickle Rick, Evil Rick, etc.) for easy identification.
 
@@ -132,6 +132,7 @@ Each sub-agent gets a unique Rick variant name (Rick Prime, Pickle Rick, Evil Ri
 Rick can edit his own source code:
 
 1. `/edit` — Starts an edit session. Creates a staging copy of `src/`, launches the `subagent-edit` container (auto-built on first run). Provider priority: **Claude Code → GPT-5.3 Codex → Gemini 3.1 Pro**, chosen automatically based on which credentials are available.
+   - `subagent-edit` image is auto-rebuilt when source hash/version labels differ, so edit mode always runs the current release image.
 2. Send prompts describing what to change — the active provider edits the files directly inside the isolated container.
 3. `/deploy` — Triggers the deploy pipeline:
    - Backup current `src/` → build candidate image → smoke test (health-only mode) → swap containers → 60s watchdog → rollback on failure

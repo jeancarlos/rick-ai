@@ -428,33 +428,69 @@ export class SessionManager {
 
   /**
    * Ensure the "subagent" Docker image exists locally.
-   * If not, build it from docker/subagent.Dockerfile (auto-build on first use).
+   * Rebuild when code hash or Rick version label differs.
    */
   private async ensureSubagentImage(): Promise<void> {
     const localAppDir = process.cwd(); // /app inside the container
     const agentMjsPath = `${localAppDir}/docker/agent.mjs`;
     const dockerfilePath = `${localAppDir}/docker/subagent.Dockerfile`;
+    const versionFilePath = `${localAppDir}/.rick-version`;
+    const packageJsonPath = `${localAppDir}/package.json`;
 
-    // Compute hash of local agent.mjs
+    // Compute hash of local subagent sources
     const { createHash } = await import("node:crypto");
-    const { readFileSync } = await import("node:fs");
-    const localHash = createHash("sha256").update(readFileSync(agentMjsPath)).digest("hex").substring(0, 16);
+    const { readFileSync, existsSync } = await import("node:fs");
+    const localHash = createHash("sha256")
+      .update(readFileSync(agentMjsPath))
+      .update("\n---\n")
+      .update(readFileSync(dockerfilePath))
+      .digest("hex")
+      .substring(0, 16);
 
-    // Check if image exists and has matching hash label
+    let localVersion = "unknown";
+    try {
+      if (existsSync(versionFilePath)) {
+        const first = readFileSync(versionFilePath, "utf-8")
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .find(Boolean);
+        if (first) localVersion = first;
+      } else {
+        const pkg = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as { version?: string };
+        if (pkg.version) localVersion = `pkg-${pkg.version}`;
+      }
+    } catch {
+      // Keep "unknown" and force label refresh if needed.
+    }
+
+    // Check if image exists and has matching hash + version labels
     try {
       const { stdout } = await execFileAsync("docker", [
-        "inspect", "--format", "{{index .Config.Labels \"agent.mjs.hash\"}}", "subagent",
+        "inspect", "--format",
+        "{{index .Config.Labels \"agent.bundle.hash\"}}|{{index .Config.Labels \"rick.version\"}}",
+        "subagent",
       ], { timeout: 10_000 });
-      const imageHash = stdout.trim();
-      if (imageHash === localHash) {
+      const [imageHash = "", imageVersion = ""] = stdout.trim().split("|");
+      if (imageHash === localHash && imageVersion === localVersion) {
         return; // Image is up to date
       }
-      logger.info({ localHash, imageHash: imageHash || "(none)" }, "agent.mjs changed — rebuilding subagent image");
+      logger.info(
+        {
+          localHash,
+          imageHash: imageHash || "(none)",
+          localVersion,
+          imageVersion: imageVersion || "(none)",
+        },
+        "subagent image out of date — rebuilding"
+      );
     } catch {
       // Image not found — will build
     }
 
-    logger.info({ hash: localHash }, "Building subagent image from docker/subagent.Dockerfile");
+    logger.info(
+      { hash: localHash, version: localVersion },
+      "Building subagent image from docker/subagent.Dockerfile"
+    );
 
     try {
       await execFileAsync(
@@ -462,13 +498,14 @@ export class SessionManager {
         [
           "build", "--no-cache",
           "-t", "subagent",
-          "--label", `agent.mjs.hash=${localHash}`,
+          "--label", `agent.bundle.hash=${localHash}`,
+          "--label", `rick.version=${localVersion}`,
           "-f", dockerfilePath,
           localAppDir,
         ],
         { timeout: 600_000 } // 10 minutes max for first build (Playwright install is slow)
       );
-      logger.info({ hash: localHash }, "subagent image built successfully");
+      logger.info({ hash: localHash, version: localVersion }, "subagent image built successfully");
     } catch (err) {
       logger.error({ err }, "Failed to build subagent image");
       throw new Error("Falha ao construir imagem do sub-agente. Verifique os logs.");

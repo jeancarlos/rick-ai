@@ -7,7 +7,7 @@
  *  - Executes tools (files, commands, web fetch, web browse)
  *  - Emits progress/results to stdout as NDJSON
  *
- * Provider priority: Gemini (always available via GEMINI_API_KEY) → OpenAI → Claude API
+ * Provider priority: Claude API → OpenAI → Gemini Pro
  *
  * Protocol (stdout NDJSON):
  *   { type: "ready", providers: [...], tools: [...] }
@@ -66,9 +66,9 @@ const hasOpenAI = !!(process.env.OPENAI_API_KEY || process.env.OPENAI_ACCESS_TOK
 const hasClaude = !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_ACCESS_TOKEN);
 
 const providers = [];
-if (hasGemini) providers.push("gemini");
-if (hasOpenAI) providers.push("openai");
 if (hasClaude) providers.push("claude");
+if (hasOpenAI) providers.push("openai");
+if (hasGemini) providers.push("gemini");
 
 // ── Rick API client (for querying memories/credentials) ─────────────────────
 
@@ -310,7 +310,7 @@ FERRAMENTAS DISPONIVEIS: ${toolNames.join(", ")}`;
 
 async function callGemini(contents) {
   const apiKey = process.env.GEMINI_API_KEY;
-  const MODEL = "gemini-2.5-flash";
+  const MODEL = "gemini-3.1-pro-preview";
   const BASE = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}`;
   const geminiTools = [{ functionDeclarations: toolDeclarations }];
 
@@ -413,7 +413,7 @@ async function runOpenAILoop(userText) {
         Authorization: authHeader,
         ...(process.env.OPENAI_ACCOUNT_ID ? { "OpenAI-Organization": process.env.OPENAI_ACCOUNT_ID } : {}),
       },
-      body: JSON.stringify({ model: "gpt-4o", messages, tools: openaiTools }),
+      body: JSON.stringify({ model: "gpt-5.3-codex", messages, tools: openaiTools }),
     });
 
     if (!res.ok) {
@@ -478,7 +478,7 @@ async function runClaudeLoop(userText) {
       method: "POST",
       headers,
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-opus-4-6",
         max_tokens: 8192,
         system: SYSTEM_PROMPT,
         messages,
@@ -573,12 +573,12 @@ rl.on("line", async (line) => {
 
   try {
     let result;
-    if (hasGemini) {
-      result = await runGeminiLoop(userText);
+    if (hasClaude) {
+      result = await runClaudeLoop(userText);
     } else if (hasOpenAI) {
       result = await runOpenAILoop(userText);
-    } else if (hasClaude) {
-      result = await runClaudeLoop(userText);
+    } else if (hasGemini) {
+      result = await runGeminiLoop(userText);
     }
 
     // Signal that we're done processing this turn but ready for more input.

@@ -483,41 +483,99 @@ export class EditSession {
   }
 
   /**
-   * Build the subagent-edit image if it is not present on this host.
-   * Runs `docker build` from the project directory using docker/subagent-edit.Dockerfile.
-   * Takes a few minutes on first run; subsequent starts are instant.
+   * Ensure subagent-edit image matches current source hash and Rick version.
+   * Rebuilds when image is missing or labels differ.
    */
   private async ensureImageExists(): Promise<void> {
+    const localAppDir = process.cwd(); // /app inside the container
+    const editAgentPath = `${localAppDir}/docker/edit-agent.mjs`;
+    const dockerfilePath = `${localAppDir}/docker/subagent-edit.Dockerfile`;
+    const versionFilePath = `${localAppDir}/.rick-version`;
+    const packageJsonPath = `${localAppDir}/package.json`;
+
+    const { createHash } = await import("node:crypto");
+    const { readFileSync, existsSync } = await import("node:fs");
+
+    const localHash = createHash("sha256")
+      .update(readFileSync(editAgentPath))
+      .update("\n---\n")
+      .update(readFileSync(dockerfilePath))
+      .digest("hex")
+      .substring(0, 16);
+
+    let localVersion = "unknown";
     try {
-      await execFileAsync("docker", ["image", "inspect", "subagent-edit"], { timeout: 10_000 });
-      return; // Image already exists
+      if (existsSync(versionFilePath)) {
+        const first = readFileSync(versionFilePath, "utf-8")
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .find(Boolean);
+        if (first) localVersion = first;
+      } else {
+        const pkg = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as { version?: string };
+        if (pkg.version) localVersion = `pkg-${pkg.version}`;
+      }
     } catch {
-      // Image not found — build it
+      // Keep unknown and refresh labels on next build.
     }
 
-    logger.info({}, "subagent-edit image not found — building from docker/subagent-edit.Dockerfile");
-    await this.sendMessage(
-      "_Imagem do agente de edição não encontrada localmente. " +
-      "Construindo agora (pode levar alguns minutos na primeira vez)..._"
-    );
+    try {
+      const { stdout } = await execFileAsync(
+        "docker",
+        [
+          "inspect",
+          "--format",
+          "{{index .Config.Labels \"edit-agent.bundle.hash\"}}|{{index .Config.Labels \"rick.version\"}}",
+          "subagent-edit",
+        ],
+        { timeout: 10_000 }
+      );
+      const [imageHash = "", imageVersion = ""] = stdout.trim().split("|");
+      if (imageHash === localHash && imageVersion === localVersion) {
+        return; // Image is up to date
+      }
+
+      logger.info(
+        {
+          localHash,
+          imageHash: imageHash || "(none)",
+          localVersion,
+          imageVersion: imageVersion || "(none)",
+        },
+        "subagent-edit image out of date — rebuilding"
+      );
+      await this.sendMessage(
+        "_Imagem do agente de edicao desatualizada para esta versao. " +
+        "Reconstruindo agora..._"
+      );
+    } catch {
+      // Image not found — build it
+      logger.info({}, "subagent-edit image not found — building from docker/subagent-edit.Dockerfile");
+      await this.sendMessage(
+        "_Imagem do agente de edicao nao encontrada localmente. " +
+        "Construindo agora (pode levar alguns minutos na primeira vez)..._"
+      );
+    }
 
     // docker build reads the context from the CLI side (inside this container),
     // so we use the local /app path where docker/ is mounted read-only.
     // The Dockerfile's COPY instructions reference paths relative to this context.
-    const localAppDir = process.cwd(); // /app inside the container
     await execFileAsync(
       "docker",
       [
         "build",
+        "--no-cache",
         "-t", "subagent-edit",
+        "--label", `edit-agent.bundle.hash=${localHash}`,
+        "--label", `rick.version=${localVersion}`,
         "-f", `${localAppDir}/docker/subagent-edit.Dockerfile`,
         localAppDir,
       ],
       { timeout: 600_000 } // 10 minutes max for first build
     );
 
-    logger.info({}, "subagent-edit image built successfully");
-    await this.sendMessage("_Imagem construída com sucesso! Iniciando sessão..._");
+    logger.info({ hash: localHash, version: localVersion }, "subagent-edit image built successfully");
+    await this.sendMessage("_Imagem construida com sucesso! Iniciando sessao..._");
   }
 
   /**

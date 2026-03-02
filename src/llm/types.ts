@@ -36,13 +36,13 @@ export interface ModelConfig {
 export const AVAILABLE_MODELS: ModelConfig[] = [
   {
     id: "gemini-flash",
-    alias: "Gemini 3 Flash Preview",
+    alias: "Gemini 3.0 Flash",
     provider: "gemini",
     modelId: "gemini-3-flash-preview",
   },
   {
     id: "gemini-pro",
-    alias: "Gemini 3.1 Pro Preview",
+    alias: "Gemini 3.1 Pro",
     provider: "gemini",
     modelId: "gemini-3.1-pro-preview",
   },
