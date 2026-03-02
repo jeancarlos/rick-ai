@@ -494,7 +494,7 @@ export class EditSession {
       "sh", "-c",
       [
         `mkdir -p ${this.stagingDir}`,
-        `tar -C /source --exclude=.git --exclude=node_modules --exclude=dist --exclude=src.bak --exclude=.rick-latest-version.json --exclude=auth_info -cf - . | tar -C ${this.stagingDir} -xf -`,
+        `tar -C /source --exclude=.git --exclude=node_modules --exclude=dist --exclude=src.bak --exclude=server-backup --exclude=.rick-latest-version.json --exclude=auth_info --exclude=data --exclude=.deploy-backup --exclude=.env -cf - . | tar -C ${this.stagingDir} -xf -`,
         `cd ${this.stagingDir} && npm install --prefer-offline 2>/dev/null`,
         `chown -R 1001:1001 ${this.stagingDir}`,
       ].join(" && "),
@@ -1275,6 +1275,8 @@ git add -A -- . \\
   ':(exclude)dist/**' \\
   ':(exclude)auth_info' \\
   ':(exclude)auth_info/**' \\
+  ':(exclude)data' \\
+  ':(exclude)data/**' \\
   ':(exclude).deploy-backup' \\
   ':(exclude).deploy-backup/**' \\
   ':(exclude).rick-latest-version.json' \\
