@@ -433,58 +433,42 @@ export class SessionManager {
   private async ensureSubagentImage(): Promise<void> {
     const localAppDir = process.cwd(); // /app inside the container
     const agentMjsPath = `${localAppDir}/docker/agent.mjs`;
+    const dockerfilePath = `${localAppDir}/docker/subagent.Dockerfile`;
 
-    let imageExists = false;
+    // Compute hash of local agent.mjs
+    const { createHash } = await import("node:crypto");
+    const { readFileSync } = await import("node:fs");
+    const localHash = createHash("sha256").update(readFileSync(agentMjsPath)).digest("hex").substring(0, 16);
+
+    // Check if image exists and has matching hash label
     try {
-      await execFileAsync("docker", ["image", "inspect", "subagent"], { timeout: 10_000 });
-      imageExists = true;
+      const { stdout } = await execFileAsync("docker", [
+        "inspect", "--format", "{{index .Config.Labels \"agent.mjs.hash\"}}", "subagent",
+      ], { timeout: 10_000 });
+      const imageHash = stdout.trim();
+      if (imageHash === localHash) {
+        return; // Image is up to date
+      }
+      logger.info({ localHash, imageHash: imageHash || "(none)" }, "agent.mjs changed — rebuilding subagent image");
     } catch {
       // Image not found — will build
     }
 
-    // If image exists, check if agent.mjs has changed since it was built.
-    // Compare hash of local agent.mjs with the copy inside the image.
-    if (imageExists) {
-      try {
-        const { createHash } = await import("node:crypto");
-        const { readFileSync } = await import("node:fs");
-        const localHash = createHash("sha256").update(readFileSync(agentMjsPath)).digest("hex").substring(0, 16);
-        const { stdout: imageHash } = await execFileAsync("docker", [
-          "run", "--rm", "subagent",
-          "sh", "-c", `sha256sum /app/agent.mjs | cut -c1-16`,
-        ], { timeout: 15_000 });
-        if (localHash === imageHash.trim()) {
-          return; // Image is up to date
-        }
-        logger.info({ localHash, imageHash: imageHash.trim() }, "agent.mjs changed — rebuilding subagent image");
-        // Remove old image (ignore errors if containers still use it)
-        try { await execFileAsync("docker", ["rmi", "subagent"], { timeout: 10_000 }); } catch {}
-      } catch (err) {
-        logger.warn({ err }, "Failed to verify subagent image hash — rebuilding");
-        try { await execFileAsync("docker", ["rmi", "subagent"], { timeout: 10_000 }); } catch {}
-      }
-    }
-
-    logger.info({}, "Building subagent image from docker/subagent.Dockerfile");
-
-    // Notify user that the image is being built (first time only)
-    // We broadcast via any active session's connector, but since we don't have
-    // direct access here, we log and let the caller handle timeout gracefully.
-
-    const dockerfilePath = `${localAppDir}/docker/subagent.Dockerfile`;
+    logger.info({ hash: localHash }, "Building subagent image from docker/subagent.Dockerfile");
 
     try {
       await execFileAsync(
         "docker",
         [
-          "build",
+          "build", "--no-cache",
           "-t", "subagent",
+          "--label", `agent.mjs.hash=${localHash}`,
           "-f", dockerfilePath,
           localAppDir,
         ],
         { timeout: 600_000 } // 10 minutes max for first build (Playwright install is slow)
       );
-      logger.info({}, "subagent image built successfully");
+      logger.info({ hash: localHash }, "subagent image built successfully");
     } catch (err) {
       logger.error({ err }, "Failed to build subagent image");
       throw new Error("Falha ao construir imagem do sub-agente. Verifique os logs.");
