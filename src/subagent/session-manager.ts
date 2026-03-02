@@ -119,6 +119,7 @@ export class SessionManager {
           numericUserId: null,
           output: "",
           pendingQuestion: null,
+          recovered: true,
           createdAt: createdTime,
           updatedAt: Date.now(),
         };
@@ -607,6 +608,13 @@ export class SessionManager {
       switch (msg.type) {
         case "ready":
           logger.info({ sessionId: session.id, providers: msg.providers, tools: msg.tools?.length }, "Sub-agent ready");
+          // Inject conversation history from DB so the agent has full context
+          // (only for recovered sessions — new sessions get their first message via sendToAgentProcess)
+          if (session.recovered) {
+            this.injectHistory(session).catch((err: any) => {
+              logger.warn({ err, sessionId: session.id }, "Failed to inject history into agent");
+            });
+          }
           break;
 
         case "message":
@@ -690,6 +698,24 @@ export class SessionManager {
         this.sendToUser(session, line);
       }
     }
+  }
+
+  /**
+   * Load conversation history from DB and send to the agent process so it
+   * has full context (needed after recovery or process restart).
+   * Only sends user + agent text messages (skips tool_use, system, etc.).
+   */
+  private async injectHistory(session: SubAgentSession): Promise<void> {
+    const history = await this.getSessionHistory(session.id);
+    // Filter to only user/agent text messages (the LLM doesn't need tool_use or system messages)
+    const messages = history
+      .filter((m) => (m.role === "user" || m.role === "agent") && m.content && m.message_type !== "tool_use" && m.message_type !== "system")
+      .map((m) => ({ role: m.role, content: m.content }));
+
+    if (messages.length === 0) return;
+
+    logger.info({ sessionId: session.id, messageCount: messages.length }, "Injecting conversation history into agent");
+    this.sendToAgentProcess(session.id, { type: "history", messages });
   }
 
   private sendToAgentProcess(sessionId: string, msg: any): void {

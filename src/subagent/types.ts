@@ -61,6 +61,8 @@ export interface SubAgentSession {
   lastMessageText?: string;
   /** Pending question from sub-agent to user */
   pendingQuestion: string | null;
+  /** True if this session was recovered after a server restart */
+  recovered?: boolean;
   createdAt: number;
   updatedAt: number;
 }

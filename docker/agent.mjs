@@ -533,6 +533,29 @@ rl.on("line", async (line) => {
     return;
   }
 
+  // Restore conversation history (sent by host after recovery or process restart).
+  // Each entry: { role: "user"|"agent", content: "..." }
+  if (msg.type === "history" && Array.isArray(msg.messages)) {
+    for (const m of msg.messages) {
+      const role = m.role === "user" ? "user" : "model";
+      if (hasGemini) {
+        geminiHistory.push({ role, parts: [{ text: m.content }] });
+      }
+      if (hasOpenAI || hasClaude) {
+        const oaRole = m.role === "user" ? "user" : "assistant";
+        if (hasOpenAI) {
+          if (!openaiHistory) openaiHistory = [{ role: "system", content: SYSTEM_PROMPT }];
+          openaiHistory.push({ role: oaRole, content: m.content });
+        }
+        if (hasClaude) {
+          claudeHistory.push({ role: oaRole, content: m.content });
+        }
+      }
+    }
+    emit({ type: "history_loaded", count: msg.messages.length });
+    return;
+  }
+
   if (msg.type !== "message" || !msg.text) return;
 
   const userText = msg.text;
