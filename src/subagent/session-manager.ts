@@ -323,9 +323,6 @@ export class SessionManager {
 
     this.sessions.set(id, session);
 
-    // Show immediate feedback in the session viewer while the container is being prepared.
-    await this.sendToUser(session, "Preparando ambiente do sub-agente...");
-
     // Persist session to DB for audit trail
     if (numericUserId) {
       this.persistSessionToDB(session).catch((err) =>
@@ -334,19 +331,7 @@ export class SessionManager {
     }
 
     try {
-      let notified = false;
-      await subagentImageBuilder.ensureForSession({
-        onStatus: (status) => {
-          if (notified) return;
-          notified = true;
-          const text = status === "building_fresh"
-            ? "Primeira execucao detectada. Construindo imagem do sub-agente..."
-            : status === "waiting_first_build"
-              ? "Aguardando finalizacao da preparacao inicial do sub-agente..."
-              : "Atualizacao da imagem em segundo plano. Iniciando com a imagem atual...";
-          this.sendToUser(session, text, "tool_use").catch(() => {});
-        },
-      });
+      await subagentImageBuilder.ensureForSession();
       await this.startContainer(session, env, images);
     } catch (err) {
       logger.error({ err, sessionId: id }, "Failed to start sub-agent container");
@@ -616,7 +601,6 @@ export class SessionManager {
       if (session.state === "running" || session.state === "starting" || session.state === "waiting_user") {
         session.state = "done";
         session.updatedAt = Date.now();
-        this.sendToUser(session, "(Sub-agente encerrou)");
         // Notify session viewers of state change
         if (this.onSessionMessage) {
           this.onSessionMessage(session.id, "system", JSON.stringify({ state: "done" }), "system");

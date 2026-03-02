@@ -2833,7 +2833,7 @@ sidebarAvatarEl.addEventListener('mouseleave', function() {
 });
 sidebarAvatarEl.addEventListener('click', function() {
   if (!providerConnectedForEdit) {
-    showToast('Conecte Anthropic ou OpenAI para habilitar o modo /edit');
+    showToast('Configure um provedor de IA para habilitar o modo /edit');
     return;
   }
   if (!avatarHovering) return;
@@ -2859,7 +2859,7 @@ function updateAvatarInteractivity() {
     sidebarAvatarEl.title = 'Clique 3x para alternar modo /edit';
   } else {
     sidebarAvatarEl.classList.add('avatar-disabled');
-    sidebarAvatarEl.title = 'Conecte Anthropic ou OpenAI para liberar o /edit';
+    sidebarAvatarEl.title = 'Configure um provedor de IA para liberar o /edit';
   }
 }
 
@@ -5014,7 +5014,7 @@ function populateSettings(settings) {
   var openaiAny = openaiOAuthConnected || openaiApiConnected;
 
   oauthConnected = anthropicOAuthConnected || openaiOAuthConnected;
-  providerConnectedForEdit = anthropicAny || openaiAny;
+  providerConnectedForEdit = anthropicAny || openaiAny || geminiConnected;
 
   // One badge per provider header
   setStatusBadge('gemini-connection-status', geminiConnected);
