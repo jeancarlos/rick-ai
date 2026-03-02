@@ -252,19 +252,19 @@ const toolDeclarations = [
   },
   {
     name: "rick_memory",
-    description: "Consulta as memorias do Rick (credenciais, informacoes salvas)",
+    description: "Lista memorias salvas pelo assistente (credenciais, links, preferencias, informacoes do usuario). Sem categoria retorna TODAS as memorias. USE ESTA FERRAMENTA PRIMEIRO quando precisar de informacoes que o usuario ja tenha ensinado ao assistente.",
     parameters: {
       type: "object",
-      properties: { category: { type: "string", description: "Categoria opcional (ex: credenciais, senhas)" } },
+      properties: { category: { type: "string", description: "Categoria opcional para filtrar. Categorias comuns: credenciais, senhas, geral, pessoal, notas, preferencias. Omita para listar TODAS." } },
     },
   },
   {
     name: "rick_search",
-    description: "Busca semantica nas conversas e memorias do Rick",
+    description: "Busca semantica nas conversas e memorias do assistente. Use quando precisar encontrar algo especifico por significado (ex: 'repositorio zydon', 'email do cliente').",
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Texto para buscar" },
+        query: { type: "string", description: "Texto para buscar por significado" },
         limit: { type: "number", description: "Numero maximo de resultados (padrao: 5)" },
       },
       required: ["query"],
@@ -287,11 +287,13 @@ REGRAS:
 2. Use as ferramentas para completar a tarefa. NAO invente resultados.
 3. Quando terminar uma etapa, emita um resumo claro do que foi feito.
 4. Se precisar de informacoes adicionais do usuario (credenciais, esclarecimentos), PERGUNTE — voce recebera a resposta na proxima mensagem.
-5. Se precisar de informacoes do ${agentName} (credenciais, memorias), use as ferramentas rick_memory e rick_search.
-6. Credenciais tambem estao disponiveis como variaveis de ambiente RICK_SECRET_* no container.
-7. Para tarefas de codigo: clone o repositorio, faca as alteracoes, rode testes se possivel.
-8. Para pesquisa web: use web_fetch para acessar URLs e extrair informacoes.
-9. Seja conciso nas mensagens intermediarias, detalhado no resultado final.
+5. Se precisar de informacoes que o usuario ja ensinou ao ${agentName} (credenciais, links de repositorios, preferencias), use rick_memory (sem categoria para ver TUDO) ou rick_search (busca por significado).
+6. SEMPRE consulte rick_memory antes de pedir informacoes ao usuario — a resposta pode ja estar la.
+7. Credenciais tambem estao disponiveis como variaveis de ambiente RICK_SECRET_* no container.
+8. Para tarefas de codigo: clone o repositorio, faca as alteracoes, rode testes se possivel.
+9. Para pesquisa web: use web_fetch para acessar URLs e extrair informacoes.
+10. Seja conciso nas mensagens intermediarias, detalhado no resultado final.
+11. Quando o usuario mencionar um projeto ou repositorio por nome, consulte rick_memory ou rick_search para descobrir a URL antes de perguntar.
 
 FERRAMENTAS DISPONIVEIS: ${toolNames.join(", ")}`;
 
