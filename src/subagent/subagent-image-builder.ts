@@ -201,17 +201,28 @@ class SubagentImageBuilder {
   }
 
   warmup(reason: string): void {
-    const local = this.getLocalFingerprint();
+    let local: ReturnType<typeof this.getLocalFingerprint>;
+    try {
+      local = this.getLocalFingerprint();
+    } catch (err) {
+      logger.warn({ err, reason }, "Subagent image warmup skipped — failed to compute fingerprint");
+      return;
+    }
     this.ensureCurrentTagExists()
       .then(() => this.imageFingerprint(CURRENT_IMAGE))
       .then((fp) => {
         if (fp === local.fingerprint) {
           this.readyFingerprint = local.fingerprint;
+          logger.info({ reason }, "Subagent image already up to date");
           return;
         }
+        logger.info({ reason, imageFingerprint: fp, localFingerprint: local.fingerprint }, "Subagent image warmup starting build");
         return this.startBackgroundBuild(local, reason);
       })
-      .catch((err) => logger.warn({ err, reason }, "Subagent image warmup failed"));
+      .catch((err) => {
+        logger.warn({ err, reason }, "Subagent image warmup failed — scheduling retry in 60s");
+        setTimeout(() => this.warmup(`${reason}_retry`), 60_000);
+      });
   }
 }
 

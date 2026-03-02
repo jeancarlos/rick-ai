@@ -443,26 +443,7 @@ export class EditSession {
    * Rebuilds when image is missing or labels differ.
    */
   private async ensureImageExists(): Promise<void> {
-    await editImageBuilder.ensureReady({
-      onStatus: async (status) => {
-        if (status === "building_outdated") {
-          await this.sendMessage(
-            "_Imagem do agente de edicao desatualizada para esta versao. Reconstruindo agora..._"
-          );
-          return;
-        }
-        if (status === "building_missing") {
-          await this.sendMessage(
-            "_Imagem do agente de edicao nao encontrada localmente. Construindo agora (pode levar alguns minutos na primeira vez)..._"
-          );
-          return;
-        }
-        await this.sendMessage(
-          "_Aguardando finalizacao da construcao da imagem do agente de edicao..._"
-        );
-      },
-    });
-    await this.sendMessage("_Imagem pronta. Iniciando sessao..._");
+    await editImageBuilder.ensureReady();
   }
 
   /**

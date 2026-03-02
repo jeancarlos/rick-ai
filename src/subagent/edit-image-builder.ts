@@ -153,19 +153,30 @@ class EditImageBuilder {
   }
 
   warmup(reason: string): void {
-    const local = this.getLocalFingerprint();
+    let local: ReturnType<typeof this.getLocalFingerprint>;
+    try {
+      local = this.getLocalFingerprint();
+    } catch (err) {
+      logger.warn({ err, reason }, "Edit image warmup skipped — failed to compute fingerprint");
+      return;
+    }
     if (this.inFlightBuild) return;
 
     this.imageFingerprint()
       .then((imageFingerprint) => {
         if (imageFingerprint === local.fingerprint) {
           this.readyFingerprint = local.fingerprint;
+          logger.info({ reason }, "Edit image already up to date");
           return;
         }
+        logger.info({ reason, imageFingerprint, localFingerprint: local.fingerprint }, "Edit image warmup starting build");
         return this.buildWithLock(local)
           .then(() => logger.info({ reason }, "Edit image warmup completed"));
       })
-      .catch((err) => logger.warn({ err, reason }, "Edit image warmup failed"));
+      .catch((err) => {
+        logger.warn({ err, reason }, "Edit image warmup failed — scheduling retry in 60s");
+        setTimeout(() => this.warmup(`${reason}_retry`), 60_000);
+      });
   }
 }
 
