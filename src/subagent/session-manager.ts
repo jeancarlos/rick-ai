@@ -111,7 +111,7 @@ export class SessionManager {
           id,
           containerId: containerId.trim(),
           containerName,
-          state: "running",
+          state: "waiting_user",
           taskDescription: "(sessao recuperada apos reinicio)",
           credentials: {},
           connectorName: "web",
@@ -614,6 +614,16 @@ export class SessionManager {
             this.injectHistory(session).catch((err: any) => {
               logger.warn({ err, sessionId: session.id }, "Failed to inject history into agent");
             });
+          }
+          break;
+
+        case "history_loaded":
+          logger.info({ sessionId: session.id, count: msg.count }, "Agent conversation history restored");
+          // After history injection, session is ready for user input
+          session.state = "waiting_user";
+          session.updatedAt = Date.now();
+          if (this.onSessionMessage) {
+            this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
           }
           break;
 
