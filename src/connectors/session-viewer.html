@@ -610,18 +610,21 @@ function updateSessionState(state) {
   var banner = document.getElementById('done-banner');
   var composeBar = document.querySelector('.compose-bar');
   var attachPreview = document.getElementById('attachments-preview');
+  var typing = document.getElementById('typing-indicator');
 
   dot.className = 'status-dot';
   if (state === 'running' || state === 'starting') {
     dot.classList.add('running');
-    text.textContent = 'Trabalhando...';
+    text.textContent = 'Digitando...';
     banner.classList.remove('visible');
     composeBar.style.display = 'flex';
+    typing.classList.add('visible');
   } else if (state === 'waiting_user') {
     dot.classList.add('waiting');
     text.textContent = 'Online';
     banner.classList.remove('visible');
     composeBar.style.display = 'flex';
+    typing.classList.remove('visible');
   } else if (state === 'done') {
     dot.classList.add('done');
     text.textContent = 'Concluido';
@@ -629,6 +632,7 @@ function updateSessionState(state) {
     banner.classList.add('visible');
     composeBar.style.display = 'none';
     attachPreview.classList.remove('visible');
+    typing.classList.remove('visible');
   } else if (state === 'killed') {
     dot.classList.add('offline');
     text.textContent = 'Encerrado';
@@ -636,9 +640,11 @@ function updateSessionState(state) {
     banner.classList.add('visible');
     composeBar.style.display = 'none';
     attachPreview.classList.remove('visible');
+    typing.classList.remove('visible');
   } else {
     dot.classList.add('offline');
     text.textContent = 'Conectando...';
+    typing.classList.remove('visible');
   }
 }
 

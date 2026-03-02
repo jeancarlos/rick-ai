@@ -349,18 +349,15 @@ let openaiHistory = null; // initialized on first use
 let claudeHistory = [];
 
 async function runGeminiLoop(userText) {
-  const MAX_ITER = 25;
   geminiHistory.push({ role: "user", parts: [{ text: userText }] });
   let contents = geminiHistory;
 
-  for (let iter = 0; iter < MAX_ITER; iter++) {
+  while (true) {
     const { texts, toolCalls, modelParts } = await callGemini(contents);
     contents.push({ role: "model", parts: modelParts });
 
     for (const text of texts) {
-      if (toolCalls.length > 0 || iter < MAX_ITER - 1) {
-        emitMessage(text);
-      }
+      emitMessage(text);
     }
 
     if (toolCalls.length === 0) {
@@ -383,8 +380,6 @@ async function runGeminiLoop(userText) {
       })),
     });
   }
-
-  return "Limite de iteracoes atingido.";
 }
 
 // ── OpenAI adapter ──────────────────────────────────────────────────────────
@@ -398,14 +393,13 @@ async function runOpenAILoop(userText) {
     function: { name: t.name, description: t.description, parameters: t.parameters },
   }));
 
-  const MAX_ITER = 25;
   if (!openaiHistory) {
     openaiHistory = [{ role: "system", content: SYSTEM_PROMPT }];
   }
   openaiHistory.push({ role: "user", content: userText });
   let messages = openaiHistory;
 
-  for (let iter = 0; iter < MAX_ITER; iter++) {
+  while (true) {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -444,8 +438,6 @@ async function runOpenAILoop(userText) {
       messages.push({ role: "tool", tool_call_id: tc.id, content: String(result) });
     }
   }
-
-  return "Limite de iteracoes atingido.";
 }
 
 // ── Claude API adapter ──────────────────────────────────────────────────────
@@ -459,11 +451,10 @@ async function runClaudeLoop(userText) {
     input_schema: t.parameters,
   }));
 
-  const MAX_ITER = 25;
   claudeHistory.push({ role: "user", content: userText });
   let messages = claudeHistory;
 
-  for (let iter = 0; iter < MAX_ITER; iter++) {
+  while (true) {
     const headers = {
       "Content-Type": "application/json",
       "anthropic-version": "2023-06-01",
@@ -514,8 +505,6 @@ async function runClaudeLoop(userText) {
 
     messages.push({ role: "user", content: toolResults });
   }
-
-  return "Limite de iteracoes atingido.";
 }
 
 // ── Main: stdin/stdout event loop ───────────────────────────────────────────

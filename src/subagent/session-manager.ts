@@ -13,6 +13,7 @@ import { config } from "../config/env.js";
 import { createAgentToken } from "./agent-token.js";
 import type { MemoryService } from "../memory/memory-service.js";
 import { subagentImageBuilder, SUBAGENT_RUNTIME_IMAGE } from "./subagent-image-builder.js";
+import { normalizeStatusToolLine } from "./tool-status.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -375,6 +376,9 @@ export class SessionManager {
     session.state = "running";
     session.pendingQuestion = null;
     session.updatedAt = Date.now();
+    if (this.onSessionMessage) {
+      this.onSessionMessage(session.id, "system", JSON.stringify({ state: "running" }), "system");
+    }
 
     // Persist user message and broadcast to session subscribers
     this.saveSessionMessage(sessionId, "user", message, "text", audioUrl, imageUrls, fileInfos).catch(() => {});
@@ -515,6 +519,9 @@ export class SessionManager {
     if (session.taskDescription && session.taskDescription.trim()) {
       session.state = "running";
       session.updatedAt = Date.now();
+      if (this.onSessionMessage) {
+        this.onSessionMessage(session.id, "system", JSON.stringify({ state: "running" }), "system");
+      }
 
       // Persist and broadcast user message
       this.saveSessionMessage(session.id, "user", session.taskDescription).catch(() => {});
@@ -652,6 +659,12 @@ export class SessionManager {
 
         case "message":
           if (msg.text) {
+            if (session.state !== "running") {
+              session.state = "running";
+              if (this.onSessionMessage) {
+                this.onSessionMessage(session.id, "system", JSON.stringify({ state: "running" }), "system");
+              }
+            }
             session.output += msg.text + "\n";
             session.updatedAt = Date.now();
             session.lastMessageText = msg.text;
@@ -662,13 +675,13 @@ export class SessionManager {
         case "status":
           // Status updates (tool execution, LLM switching, context rotation)
           if (msg.message) {
-            // Format for terminal block: wrap tool name and args in backticks
-            // Input: "Executando: read_file (path.js)"  →  "Executando: `read_file` `path.js`"
-            const statusText = msg.message.replace(
-              /^(Executando:\s*)(\S+?)(?:\s+\(([^)]+)\))?$/,
-              (_: string, prefix: string, tool: string, arg?: string) =>
-                arg ? `${prefix}\`${tool}\` \`${arg}\`` : `${prefix}\`${tool}\``
-            );
+            if (session.state !== "running") {
+              session.state = "running";
+              if (this.onSessionMessage) {
+                this.onSessionMessage(session.id, "system", JSON.stringify({ state: "running" }), "system");
+              }
+            }
+            const statusText = normalizeStatusToolLine(msg.message);
             this.sendToUser(session, statusText, "tool_use");
           }
           break;

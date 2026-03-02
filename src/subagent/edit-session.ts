@@ -11,6 +11,7 @@ import { createAgentToken } from "./agent-token.js";
 import type { MemoryService } from "../memory/memory-service.js";
 import type { MediaAttachment } from "../llm/types.js";
 import { editImageBuilder } from "./edit-image-builder.js";
+import { buildToolUseLine } from "./tool-status.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -208,56 +209,6 @@ const EDIT_SYSTEM_PROMPT = [
   "Exemplo leitura: curl -sf -H \"Authorization: Bearer $RICK_SESSION_TOKEN\" \"$RICK_API_URL/api/agent/memories?category=geral\"",
   "Exemplo escrita: curl -sf -X POST -H \"Authorization: Bearer $RICK_SESSION_TOKEN\" -H \"Content-Type: application/json\" -d '{\"key\":\"exemplo\",\"value\":\"valor\",\"category\":\"notas\"}' \"$RICK_API_URL/api/agent/memory\"",
 ].join("\n");
-
-/**
- * Builds the formatted tool-use line for display in the UI terminal block.
- * Extracts the most relevant argument from block.input depending on the tool.
- *
- * Format: `\n\`[ToolName]\` \`arg\`\n`
- * The UI (formatToolLine) uses backtick-enclosed segments to colorize:
- *   - first backtick segment → tool name (blue)
- *   - subsequent segments    → arguments (green)
- */
-function buildToolLine(block: { name: string; input?: Record<string, unknown> }): string {
-  const inp = block.input ?? {};
-  let toolLine = `\n\`[${block.name}]\` `;
-
-  if (typeof inp.command === "string") {
-    // Bash
-    toolLine += `\`$ ${inp.command}\`\n`;
-  } else if (typeof inp.filePath === "string" || typeof inp.file_path === "string") {
-    // Read, Write, Edit, NotebookEdit (file_path variant)
-    toolLine += `\`${inp.filePath ?? inp.file_path}\`\n`;
-  } else if (typeof inp.notebook_path === "string") {
-    // NotebookEdit (notebook_path variant)
-    toolLine += `\`${inp.notebook_path}\`\n`;
-  } else if (typeof inp.pattern === "string") {
-    // Grep / Glob — show pattern + optional path
-    const location = (inp.path ?? inp.glob ?? inp.include) as string | undefined;
-    toolLine += location
-      ? `\`${inp.pattern}\` \`${location}\`\n`
-      : `\`${inp.pattern}\`\n`;
-  } else if (typeof inp.url === "string") {
-    // WebFetch
-    toolLine += `\`${inp.url}\`\n`;
-  } else if (Array.isArray(inp.todos)) {
-    // TodoWrite
-    toolLine += `\`${inp.todos.length} ${inp.todos.length === 1 ? "item" : "itens"}\`\n`;
-  } else if (typeof inp.description === "string") {
-    // Task
-    toolLine += `\`${inp.description}\`\n`;
-  } else if (typeof inp.prompt === "string") {
-    // Task (prompt variant) / WebFetch prompt
-    const short = inp.prompt.length > 80 ? inp.prompt.slice(0, 77) + "..." : inp.prompt;
-    toolLine += `\`${short}\`\n`;
-  } else {
-    // Generic fallback: first string value from input
-    const firstVal = Object.values(inp).find((v): v is string => typeof v === "string");
-    toolLine += firstVal ? `\`${firstVal}\`\n` : "\n";
-  }
-
-  return toolLine;
-}
 
 export class EditSession {
   readonly id: string;
@@ -731,7 +682,7 @@ export class EditSession {
                   rateLimited = true;
                 }
               } else if (block.type === "tool_use") {
-                const toolLine = buildToolLine(block);
+                const toolLine = buildToolUseLine(block.name, block.input);
                 queue.push(toolLine, "tool_use");
                 totalOutput += toolLine.length;
                 this.saveHistory?.(toolLine, "tool_use").catch(() => {});
@@ -777,7 +728,7 @@ export class EditSession {
                   totalOutput += block.text.length;
                   this.saveHistory?.(block.text, "text").catch(() => {});
                 } else if (block.type === "tool_use") {
-                  const toolLine = buildToolLine(block);
+                  const toolLine = buildToolUseLine(block.name, block.input);
                   queue.push(toolLine, "tool_use");
                   totalOutput += toolLine.length;
                   this.saveHistory?.(toolLine, "tool_use").catch(() => {});
