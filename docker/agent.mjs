@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * agent.mjs — Unified sub-agent for Rick AI
+ * agent.mjs — Unified sub-agent for AI assistant
  *
  * Entry point for the "subagent" container. Runs an agentic loop that:
  *  - Reads tasks from stdin as NDJSON  { type: "message", text, images? }
@@ -171,18 +171,21 @@ async function executeTool(name, input) {
     }
     case "rick_memory": {
       const data = await rickApiGet(`/api/agent/memories${input.category ? `?category=${encodeURIComponent(input.category)}` : ""}`);
-      if (!data) return "Nao foi possivel acessar as memorias do Rick.";
+      if (!data) return "Nao foi possivel acessar as memorias do assistente.";
       return JSON.stringify(data.memories || [], null, 2);
     }
     case "rick_search": {
       const data = await rickApiGet(`/api/agent/search?q=${encodeURIComponent(input.query)}&limit=${input.limit || 5}`);
-      if (!data) return "Busca semantica nao disponivel.";
+      if (!data) return "Busca semantica nao disponivel no assistente.";
       return JSON.stringify(data.results || [], null, 2);
     }
     default:
       return `Ferramenta desconhecida: ${name}`;
   }
 }
+
+// ── Agent name (used in tool descriptions and system prompt) ────────────────
+const agentName = process.env.AGENT_NAME || "Rick";
 
 // ── Tool declarations ───────────────────────────────────────────────────────
 
@@ -252,7 +255,7 @@ const toolDeclarations = [
   },
   {
     name: "rick_memory",
-    description: "Lista memorias salvas pelo assistente (credenciais, links, preferencias, informacoes do usuario). Sem categoria retorna TODAS as memorias. USE ESTA FERRAMENTA PRIMEIRO quando precisar de informacoes que o usuario ja tenha ensinado ao assistente.",
+    description: `Lista memorias salvas pelo ${agentName} (credenciais, links, preferencias, informacoes do usuario). Sem categoria retorna TODAS as memorias. USE ESTA FERRAMENTA PRIMEIRO quando precisar de informacoes que o usuario ja tenha ensinado.`,
     parameters: {
       type: "object",
       properties: { category: { type: "string", description: "Categoria opcional para filtrar. Categorias comuns: credenciais, senhas, geral, pessoal, notas, preferencias. Omita para listar TODAS." } },
@@ -260,7 +263,7 @@ const toolDeclarations = [
   },
   {
     name: "rick_search",
-    description: "Busca semantica nas conversas e memorias do assistente. Use quando precisar encontrar algo especifico por significado (ex: 'repositorio zydon', 'email do cliente').",
+    description: `Busca semantica nas conversas e memorias do ${agentName}. Use quando precisar encontrar algo especifico por significado (ex: 'repositorio zydon', 'email do cliente').`,
     parameters: {
       type: "object",
       properties: {
@@ -275,8 +278,6 @@ const toolDeclarations = [
 const toolNames = toolDeclarations.map((t) => t.name);
 
 // ── System prompt ───────────────────────────────────────────────────────────
-
-const agentName = process.env.AGENT_NAME || "Rick";
 const SYSTEM_PROMPT = `Voce e ${agentName} Sub-Agent, um agente autonomo executando dentro de um container Docker.
 
 Sua tarefa e realizar o que o usuario pedir usando as ferramentas disponiveis.
@@ -286,7 +287,7 @@ REGRAS:
 1. Responda sempre em portugues brasileiro.
 2. Use as ferramentas para completar a tarefa. NAO invente resultados.
 3. Quando terminar uma etapa, emita um resumo claro do que foi feito.
-4. Se precisar de informacoes adicionais do usuario (credenciais, esclarecimentos), PERGUNTE — voce recebera a resposta na proxima mensagem.
+4. Se precisar de informacoes adicionais, PERGUNTE DIRETAMENTE ao usuario (ex: "Qual a URL do repositorio?") — voce recebera a resposta na proxima mensagem. Fale sempre em segunda pessoa, direto com o usuario.
 5. Se precisar de informacoes que o usuario ja ensinou ao ${agentName} (credenciais, links de repositorios, preferencias), use rick_memory (sem categoria para ver TUDO) ou rick_search (busca por significado).
 6. SEMPRE consulte rick_memory antes de pedir informacoes ao usuario — a resposta pode ja estar la.
 7. Credenciais tambem estao disponiveis como variaveis de ambiente RICK_SECRET_* no container.
