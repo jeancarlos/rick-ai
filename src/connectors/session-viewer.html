@@ -791,6 +791,11 @@ function connect() {
           pendingUserEcho = false;
           break;
         }
+        // When we receive an agent message, the session is now waiting for user input.
+        // Update state to hide typing indicator exactly when message appears.
+        if (msg.role === 'agent' && (sessionState === 'running' || sessionState === 'starting')) {
+          updateSessionState('waiting_user');
+        }
         appendMessage(msg.text, msg.role, msg.messageType);
         break;
 

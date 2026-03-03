@@ -944,6 +944,14 @@ function connect() {
           // Update local preview with server URLs if available
           break;
         }
+        // When we receive an agent message, hide the typing indicator immediately.
+        // This ensures "Digitando..." disappears exactly when the message appears.
+        if (msg.role === 'agent') {
+          isProcessing = false;
+          document.getElementById('typing-indicator').classList.remove('visible');
+          document.getElementById('status-text').textContent = 'Online';
+          updateSendButton();
+        }
         appendMessage(msg.text, msg.role, msg.messageType, msg.audioUrl || null, msg.imageUrls || null, msg.fileInfos || null);
         break;
 
