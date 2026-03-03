@@ -49,11 +49,22 @@ else
   echo ""
 
   # Gemini API key (required)
+  echo -e "  ${CYAN}Gemini API Key${NC} (required)"
+  echo ""
+  echo "  Rick uses Google Gemini as its main LLM. You need a free API key."
+  echo ""
+  echo "  How to get one:"
+  echo "    1. Go to https://aistudio.google.com/apikey"
+  echo "    2. Sign in with your Google account"
+  echo "    3. Click \"Create API key\""
+  echo "    4. Copy the key and paste it below"
+  echo ""
   GEMINI_KEY=""
   while [[ -z "$GEMINI_KEY" ]]; do
-    read -rp "  Gemini API key (required — get one at https://aistudio.google.com/apikey): " GEMINI_KEY
+    read -rp "  Gemini API key: " GEMINI_KEY
     [[ -z "$GEMINI_KEY" ]] && warn "Gemini API key is required to run Rick."
   done
+  ok "Gemini API key set"
 
   # Web UI password (optional but recommended)
   read -rp "  Web UI password (leave empty to disable Web UI): " WEB_PASSWORD
