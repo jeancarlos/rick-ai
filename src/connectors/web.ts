@@ -1048,6 +1048,14 @@ export class WebConnector implements Connector {
       if (clientSessionId) respPayload.sessionId = clientSessionId;
       this.broadcastToAuthenticated(respPayload);
     }
+
+    // Send typing:false AFTER the message is delivered to ensure
+    // the typing indicator stays visible until the message appears.
+    this.broadcastToAuthenticated({ type: "typing", composing: false });
+    // Also notify main session viewers
+    if (this.adminUserId) {
+      this.broadcastTypingToMainViewers(this.adminUserId, false);
+    }
   }
 
   // ==================== Settings ====================

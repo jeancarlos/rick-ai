@@ -3134,12 +3134,8 @@ function handleServerMessage(msg) {
       )) {
         deployInProgress = true;
       }
-      // When we receive an agent message, hide the typing indicator immediately.
-      // This ensures "Digitando..." disappears exactly when the message appears,
-      // not before (which caused a visible delay between indicator and message).
-      if (from === 'agent') {
-        showTyping(false);
-      }
+      // Typing indicator is hidden by the backend via a separate 'typing' event
+      // sent AFTER the message is delivered, ensuring proper synchronization.
       storeMessage(sid, msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null, echoFileInfos);
       if (sid === currentSessionId) {
         appendMessageToDOM(msg.text, from, msg.audioUrl || null, echoImageUrls, msg.messageType || null, echoFileInfos);

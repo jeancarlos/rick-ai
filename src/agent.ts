@@ -465,8 +465,8 @@ export class Agent {
       if (currentState && currentState.generation === generation) {
         this.userAbortControllers.delete(userPhone);
       }
-      await this.connectorManager.setTyping(connectorName, userPhone, false);
-      if (this.mainTypingCallback) try { this.mainTypingCallback(user.id, false); } catch {}
+      // Note: setTyping(false) is now called by connectors AFTER sending the response,
+      // ensuring the typing indicator stays visible until the message is delivered.
     }
   }
 

@@ -557,13 +557,14 @@ export class WhatsAppConnector implements Connector {
 
       const response = await this.manager.handleIncomingMessage(incoming);
 
-      // Stop typing
-      await this.sock?.sendPresenceUpdate("paused", chatJid);
-
       // Send response and track it as AGENT (skip empty — edit mode sends async)
       if (response) {
         await this.sendTextMessage(chatJid, response);
       }
+
+      // Stop typing AFTER sending the response to ensure the typing indicator
+      // stays visible until the message is actually delivered.
+      await this.sock?.sendPresenceUpdate("paused", chatJid);
 
       logger.info(
         { to: senderId, responseLength: response.length },
