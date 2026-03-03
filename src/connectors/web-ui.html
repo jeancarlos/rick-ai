@@ -3398,7 +3398,7 @@ function updateEphemeralSessions(sessions) {
 
     var isActive = s.id === currentSessionId;
     var name = sessionVariantName(s);
-    var desc = sessionRoleLabel();
+    var desc = s.taskDescription || sessionRoleLabel();
 
     html += '<div class="session-item" onclick="openSessionPage(\'' + escapeAttr(s.id) + '\')">';
     html += '<div class="session-icon ' + iconClass + '">' + iconSvg + '</div>';
