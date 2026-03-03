@@ -249,21 +249,12 @@ body {
 </div>
 
 <script>
-// ==================== VARIANT NAMES (must match server + session-viewer) ====================
-var VARIANT_SUFFIXES = ['Prime', 'Alpha', 'Beta', 'Gamma', 'Delta', 'Omega', 'Neo', 'Zero', 'Nova', 'Flux'];
-
-function hashString(str) {
-  var h = 0;
-  for (var i = 0; i < str.length; i++) {
-    h = ((h << 5) - h) + str.charCodeAt(i);
-    h |= 0;
-  }
-  return Math.abs(h);
-}
-
-function sessionVariantName(sessionId, agentName) {
-  var suffix = VARIANT_SUFFIXES[hashString(sessionId) % VARIANT_SUFFIXES.length];
-  return (agentName || 'Sub-agente') + ' ' + suffix;
+// ==================== VARIANT NAMES ====================
+// Variant names are now computed server-side and returned in the API response.
+// This function is only a fallback for old sessions without a stored variant_name.
+function sessionDisplayName(session, agentName) {
+  if (session.variantName) return session.variantName;
+  return (agentName || 'Sub-agente') + ' #' + session.id.substring(0, 6);
 }
 
 // ==================== HELPERS ====================
@@ -366,7 +357,7 @@ function renderSessions(agentName, agentLogo, sessions) {
 
   for (var i = 0; i < sessions.length; i++) {
     var s = sessions[i];
-    var variantName = sessionVariantName(s.id, agentName);
+    var variantName = sessionDisplayName(s, agentName);
     var isHighlighted = highlightId && s.id === highlightId;
     var canKill = isActive(s.status);
 

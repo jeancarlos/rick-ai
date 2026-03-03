@@ -677,12 +677,13 @@ async function handlePublicSessionsApi(token: string, res: ServerResponse): Prom
          s.started_at,
          s.ended_at,
          s.connector_name,
+         s.variant_name,
          MAX(CASE WHEN m.role = 'user' THEN m.created_at END) AS last_user_message,
          MAX(m.created_at) AS last_message_at
        FROM sub_agent_sessions s
        LEFT JOIN session_messages m ON m.session_id = s.id
        WHERE s.user_id = $1
-       GROUP BY s.id, s.task, s.status, s.started_at, s.ended_at, s.connector_name
+       GROUP BY s.id, s.task, s.status, s.started_at, s.ended_at, s.connector_name, s.variant_name
        ORDER BY COALESCE(MAX(m.created_at), s.started_at) DESC
        LIMIT 100`,
       [userId],
@@ -695,6 +696,7 @@ async function handlePublicSessionsApi(token: string, res: ServerResponse): Prom
       startedAt: r.started_at,
       endedAt: r.ended_at,
       connectorName: r.connector_name,
+      variantName: r.variant_name || null,
       lastUserMessage: r.last_user_message,
       lastMessageAt: r.last_message_at,
     }));

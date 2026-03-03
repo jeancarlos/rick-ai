@@ -7,7 +7,7 @@ import { VectorMemoryService } from "./memory/vector-memory-service.js";
 import { ClaudeOAuthService } from "./auth/claude-oauth.js";
 import { OpenAIOAuthService } from "./auth/openai-oauth.js";
 import { claudeOAuthService, openaiOAuthService } from "./auth/oauth-singleton.js";
-import { SessionManager, getSessionRickName, getUserSessionsToken } from "./subagent/session-manager.js";
+import { SessionManager, getSessionVariantName, getUserSessionsToken } from "./subagent/session-manager.js";
 import { EditSession, AuthExpiredCallback, GetFreshTokenCallback, SaveHistoryFn } from "./subagent/edit-session.js";
 import { classifyTask } from "./subagent/classifier.js";
 import { PendingDelegation } from "./subagent/types.js";
@@ -588,15 +588,15 @@ export class Agent {
     }
 
     // Build ack with variant name + public session link (if webBaseUrl configured)
-    const rickName = getSessionRickName(session.id);
+    const variantName = await getSessionVariantName(session.id, userId);
     const baseUrl = config.webBaseUrl;
     let ack: string;
     if (baseUrl && userId) {
       const userToken = getUserSessionsToken(userId);
       const sessionUrl = `${baseUrl}/u/${userToken}#${session.id}`;
-      ack = `O *${rickName}* vai cuidar disso pra voce, pode acompanhar aqui:\n${sessionUrl}`;
+      ack = `O *${variantName}* vai cuidar disso pra voce, pode acompanhar aqui:\n${sessionUrl}`;
     } else {
-      ack = `O *${rickName}* vai cuidar disso pra voce. Aguarde o resultado.`;
+      ack = `O *${variantName}* vai cuidar disso pra voce. Aguarde o resultado.`;
     }
 
     await this.memory.saveMessageByUserId(userId!, "assistant", ack);
@@ -2043,6 +2043,7 @@ Retorne APENAS as linhas de extracao, nada mais.`;
           id: s.id,
           state: s.state,
           taskDescription: s.taskDescription,
+          variantName: s.variantName,
           createdAt: s.createdAt,
         }));
       },
@@ -2086,8 +2087,8 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         return this.sessionManager.getSessionHistory(sessionId);
       },
 
-      getSessionStatusFromDB: async (sessionId: string) => {
-        return this.sessionManager.getSessionStatusFromDB(sessionId);
+      getSessionInfoFromDB: async (sessionId: string) => {
+        return this.sessionManager.getSessionInfoFromDB(sessionId);
       },
 
       getEditHistory: async (): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>> => {
@@ -2153,15 +2154,15 @@ Retorne APENAS as linhas de extracao, nada mais.`;
           throw err;
         }
 
-        const rickName = getSessionRickName(session.id);
+        const variantName = await getSessionVariantName(session.id, numUserId || undefined);
         const baseUrl = config.webBaseUrl;
         let ack: string;
         if (baseUrl && numUserId) {
           const userToken = getUserSessionsToken(numUserId);
           const sessionUrl = `${baseUrl}/u/${userToken}#${session.id}`;
-          ack = `Sessao *${rickName}* aberta e aguardando sua primeira tarefa:\n${sessionUrl}`;
+          ack = `Sessao *${variantName}* aberta e aguardando sua primeira tarefa:\n${sessionUrl}`;
         } else {
-          ack = `Sessao *${rickName}* aberta e aguardando sua primeira tarefa.`;
+          ack = `Sessao *${variantName}* aberta e aguardando sua primeira tarefa.`;
         }
         await this.memory.saveMessageByUserId(numUserId, "assistant", ack);
         return ack;

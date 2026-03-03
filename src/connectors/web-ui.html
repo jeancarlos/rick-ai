@@ -2790,7 +2790,7 @@ var EVIL_MORTY_AVATAR = 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://
 // ==================== AGENT IDENTITY (dynamic) ====================
 var agentName = 'Rick';
 var agentAvatar = DEFAULT_AVATAR;
-var AGENT_NAMES_SUFFIXES = ['Prime', 'Alpha', 'Beta', 'Gamma', 'Delta', 'Omega', 'Neo', 'Zero', 'Nova', 'Flux'];
+// Variant names are now computed server-side. This is only a fallback for display.
 
 // Restore cached identity for instant display on page load (before WebSocket auth)
 try {
@@ -2806,6 +2806,7 @@ document.getElementById('login-title').textContent = agentName + ' AI';
 document.title = agentName + ' AI';
 document.getElementById('sidebar-avatar').src = agentAvatar;
 document.getElementById('sidebar-title').textContent = agentName + ' AI';
+document.getElementById('main-session-name').textContent = agentName.toLowerCase() === 'rick' ? 'Rick C-137' : agentName + ' Alpha';
 
 // Fetch identity from server to guarantee correct branding on first visit
 // (before localStorage is populated). applyAgentIdentity is defined later in
@@ -3323,20 +3324,13 @@ function startSessionPolling() {
   }, 5000);
 }
 
-function hashString(str) {
-  var h = 0;
-  for (var i = 0; i < str.length; i++) {
-    h = ((h << 5) - h) + str.charCodeAt(i);
-    h |= 0;
-  }
-  return Math.abs(h);
-}
-
-function sessionVariantName(sessionId, fallbackIndex) {
-  var suffix = !sessionId
-    ? AGENT_NAMES_SUFFIXES[fallbackIndex % AGENT_NAMES_SUFFIXES.length]
-    : AGENT_NAMES_SUFFIXES[hashString(sessionId) % AGENT_NAMES_SUFFIXES.length];
-  return agentName + ' ' + suffix;
+// Variant names are computed server-side and included in session objects.
+// This function uses the server-provided name or falls back to a short ID.
+function sessionVariantName(session) {
+  if (typeof session === 'object' && session.variantName) return session.variantName;
+  // Fallback for old sessions or when only sessionId is available
+  var id = typeof session === 'string' ? session : (session ? session.id : '');
+  return agentName + ' #' + (id || '?').substring(0, 6);
 }
 
 function sessionRoleLabel() {
@@ -3365,7 +3359,7 @@ function updateEphemeralSessions(sessions) {
     var iconSvg = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zM7.5 11.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5S9.83 13 9 13s-1.5-.67-1.5-1.5zM16 17H8v-2h8v2zm-1-4c-.83 0-1.5-.67-1.5-1.5S14.17 10 15 10s1.5.67 1.5 1.5S15.83 13 15 13z"/></svg>';
 
     var isActive = s.id === currentSessionId;
-    var name = sessionVariantName(s.id, i);
+    var name = sessionVariantName(s);
     var desc = sessionRoleLabel();
 
     html += '<div class="session-item" onclick="openSessionPage(\'' + escapeAttr(s.id) + '\')">';
@@ -5199,7 +5193,7 @@ function applyAgentIdentity(name, logo) {
   var sidebarAvatar = document.getElementById('sidebar-avatar');
   if (sidebarAvatar) sidebarAvatar.src = agentAvatar;
   var mainSession = document.getElementById('main-session-name');
-  if (mainSession) mainSession.textContent = agentName + ' C-137';
+  if (mainSession) mainSession.textContent = agentName.toLowerCase() === 'rick' ? 'Rick C-137' : agentName + ' Alpha';
   var logoPreview = document.getElementById('setting-agent-logo-preview');
   if (logoPreview) logoPreview.src = agentAvatar;
   var clearBtn = document.getElementById('btn-clear-logo');

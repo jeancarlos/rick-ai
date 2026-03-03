@@ -43,6 +43,7 @@ export interface WebAgentBridge {
     id: string;
     state: string;
     taskDescription: string;
+    variantName?: string;
     createdAt: number;
   }>;
   /** Kill a sub-agent session */
@@ -59,8 +60,8 @@ export interface WebAgentBridge {
   getConversationHistory(userPhone: string, limit?: number, numericUserId?: number): Promise<Array<{ role: string; content: string; created_at?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }>; message_type?: string }>>;
   /** Get message history for a sub-agent session */
   getSessionHistory(sessionId: string): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>>;
-  /** Get the persisted status of a session from the DB ('active' | 'done' | 'killed' | null) */
-  getSessionStatusFromDB(sessionId: string): Promise<string | null>;
+  /** Get the persisted status and variant name of a session from the DB */
+  getSessionInfoFromDB(sessionId: string): Promise<{ status: string; variantName: string | null } | null>;
   /** Get message history for the active edit session */
   getEditHistory(): Promise<Array<{ role: string; content: string; created_at: string; message_type?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }> }>>;
   /** Send audio transcription update to all web clients */
@@ -415,11 +416,12 @@ export class WebConnector implements Connector {
             ws.send(JSON.stringify({ type: "session_info", session: { ...session, agentName } }));
           } else if (history.length > 0) {
             // Session is no longer in memory — check DB for the real status
-            const dbStatus = await this.agentBridge!.getSessionStatusFromDB(sessionId);
+            const dbInfo = await this.agentBridge!.getSessionInfoFromDB(sessionId);
             // Map DB status ('active'|'done'|'killed') to viewer state
-            const state = dbStatus === "killed" ? "killed" : "done";
+            const state = dbInfo?.status === "killed" ? "killed" : "done";
+            const variantName = dbInfo?.variantName || undefined;
             ws.send(JSON.stringify({ type: "session_history", messages: history }));
-            ws.send(JSON.stringify({ type: "session_info", session: { id: sessionId, state, agentName } }));
+            ws.send(JSON.stringify({ type: "session_info", session: { id: sessionId, state, agentName, variantName } }));
           } else {
             // Session doesn't exist and has no history — not found
             ws.send(JSON.stringify({ type: "session_not_found", sessionId }));

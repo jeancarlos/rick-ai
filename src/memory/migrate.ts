@@ -274,6 +274,15 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE sub_agent_sessions ADD COLUMN IF NOT EXISTS user_external_id VARCHAR(255)`,
     ],
   },
+
+  {
+    name: "014_subagent_variant_name",
+    statements: [
+      // Store the assigned variant name so it's stable across restarts and
+      // can be served to clients without replicating the naming logic.
+      `ALTER TABLE sub_agent_sessions ADD COLUMN IF NOT EXISTS variant_name VARCHAR(255)`,
+    ],
+  },
 ];
 
 export async function runMigrations(): Promise<void> {

@@ -483,23 +483,9 @@ body {
 
 <script src="/static/tool-blocks.js"></script>
 <script>
-// ==================== RICK NAMES (must match server + main UI) ====================
-/** Variant name suffixes — must match server VARIANT_SUFFIXES and web-ui AGENT_NAMES_SUFFIXES */
-var VARIANT_SUFFIXES = ['Prime', 'Alpha', 'Beta', 'Gamma', 'Delta', 'Omega', 'Neo', 'Zero', 'Nova', 'Flux'];
-
-function hashString(str) {
-  var h = 0;
-  for (var i = 0; i < str.length; i++) {
-    h = ((h << 5) - h) + str.charCodeAt(i);
-    h |= 0;
-  }
-  return Math.abs(h);
-}
-
-function sessionVariantName(sessionId, agentName) {
-  var suffix = VARIANT_SUFFIXES[hashString(sessionId) % VARIANT_SUFFIXES.length];
-  return (agentName || 'Sub-agente') + ' ' + suffix;
-}
+// ==================== VARIANT NAMES ====================
+// Variant names are now computed server-side and sent in the session_info message.
+// Initial display uses a placeholder until the server sends the real name.
 
 // ==================== STATE ====================
 var sessionId = location.pathname.replace(/^\/s\//, '');
@@ -509,7 +495,7 @@ var reconnectAttempts = 0;
 var reconnectTimer = null;
 var sessionState = 'unknown'; // unknown, running, done, killed
 var pendingUserEcho = false; // true after local sendMessage — skip server echo
-var sessionName = sessionVariantName(sessionId, null);
+var sessionName = 'Sub-agente #' + sessionId.substring(0, 6);
 
 document.title = sessionName;
 document.getElementById('header-name').textContent = sessionName;
@@ -771,12 +757,14 @@ function connect() {
 
       case 'session_info':
         if (msg.session) {
-          // Update variant name if server provided the agent name
-          if (msg.session.agentName) {
-            sessionName = sessionVariantName(sessionId, msg.session.agentName);
-            document.getElementById('header-name').textContent = sessionName;
-            document.title = sessionName;
+          // Update variant name from server (computed server-side)
+          if (msg.session.variantName) {
+            sessionName = msg.session.variantName;
+          } else if (msg.session.agentName) {
+            sessionName = msg.session.agentName + ' #' + sessionId.substring(0, 6);
           }
+          document.getElementById('header-name').textContent = sessionName;
+          document.title = sessionName;
           updateHeaderIcon();
           updateSessionState(msg.session.state);
         }

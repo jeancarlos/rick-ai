@@ -26,9 +26,124 @@ function sanitizeEnvKey(raw: string): string | null {
   return sanitized || null;
 }
 
-/** Variant name suffixes — must match frontend AGENT_NAMES_SUFFIXES array */
-const VARIANT_SUFFIXES = ["Prime", "Alpha", "Beta", "Gamma", "Delta", "Omega", "Neo", "Zero", "Nova", "Flux"];
+/**
+ * Rick variant names — canonical Rick and Morty character names from the wiki.
+ * Used when agentName is "Rick". Excludes "Rick Sanchez" and "Rick C-137" (the main Rick).
+ * Sorted alphabetically for predictable sequential assignment.
+ */
+const RICK_VARIANT_NAMES: string[] = [
+  "Adjudicator Rick", "Afro Rick", "Alien Rick", "Antenna Rick", "Aqua Rick",
+  "Bald Rick", "Barber Rick", "Beard Rick", "Big Fat Rick", "Big Rick",
+  "Black Magic Rick", "Bootleg Portal Chemist Rick", "Bubble Gum Rick",
+  "Careless Rick", "Cat Rick", "Commander Rick", "Completionist Rick",
+  "Cool Rick", "Cop Rick", "Crazy Cat Rick", "Cronenberg Rick",
+  "Curly-haired Rick", "Cyclops Rick",
+  "Dandy Rick", "Disheveled Rick", "Doc Smith", "Doofus Rick", "Dreamy Rick",
+  "Druggie Rick", "Dumb Rick",
+  "Earring Rick", "Evil Rick", "Eye Patch Rick",
+  "Fancy Rick", "Farmer Rick", "Fascist Rick", "Female Doofus Rick",
+  "Flat Top Rick", "Four Eyes Rick",
+  "Garment District Rick", "Glockenspiel Rick", "Grandpa Rick", "Grateful Rick",
+  "Guard Rick", "Guilty Rick",
+  "Happy Rick", "Hawaiian Rick", "Headband Rick", "Healthy Rick", "Hologram Rick",
+  "Homesteader Rick", "Hopeful Rick", "Hothead Rick",
+  "Indiana Jones Rick", "Insightful Rick", "Insurance Rick", "Investigator Rick",
+  "James Bond Rick", "Jerricky", "Jerryboree Employee Rick", "Jerry Rick",
+  "John McLane Rick", "John Rick", "Josuke Rick", "Juggling Rick", "Junk Yard Rick",
+  "Killer Droid Rick",
+  "Lab Rick", "Leg Rick", "Little Ricky Wrap-it-up", "Lizard Rick",
+  "Maximums Rickimus", "Mechanical Rick", "Memory Rick", "Morty Rick",
+  "Mullet Rick", "Mumbling Rick", "Mustache Rick", "Mysterious Rick",
+  "Nega-Rick", "Nerd Rick", "Nice Rick", "Night Rick", "Novelist Rick",
+  "Oddjob Rick", "Old God Rick",
+  "Pickle Rick", "Plumber Rick", "Private Sector Rick",
+  "Quantum Rick",
+  "Radar Rick", "Rebel Rick", "Reek", "Regional Manager Rick",
+  "Retired General Rick", "Revengeful Rick", "Rick D. Sanchez III",
+  "Rick Guilt Rick", "Rick Prime", "RickBot", "Ricktiminus Sancheziminius",
+  "Rick Jerry", "Riq IV", "Robot Rick", "Rule 63 Cosplay Rick",
+  "Salesman Rick", "Scarecrow Rick", "Sci-Fi Politician Rick", "Sheikh Rick",
+  "Shibuya Rick", "Shrimp Rick", "Simple Rick", "Slow Jamz Rick", "Slow Rick",
+  "Solicitor Rick", "Space Jam Rick", "Stan Lee Rick", "Steve Jobs Rick",
+  "Story Train Rick", "Super Fan Rick", "Super Weird Rick", "Survivor Rick",
+  "Teacher Rick", "Teddy Rick", "The Scientist Formerly Known as Rick",
+  "The Scientist Known as Rick", "Tiny Rick", "Toxic Rick", "Trafficker Rick",
+  "Turtleneck Rick",
+  "Visor Rick",
+  "Wasp Rick", "Western Rick", "Woman Rick",
+  "Yellow Shirt Rick", "Yo-Yo Rick", "Young Rick",
+  "Zero Rick", "Zeta Alpha Rick",
+];
 
+/**
+ * Generic variant suffixes — used when agentName is NOT "Rick" (e.g. "Zoe").
+ * "Alpha" is excluded because it's reserved for the main session ("{Agent} Alpha").
+ * Pre-shuffled for unpredictable sequential assignment.
+ */
+const GENERIC_VARIANT_SUFFIXES: string[] = [
+  // Shuffled mix of Greek letters, space/sci-fi, tech, and NATO phonetic terms.
+  "Nebula", "Kilo", "Sigma", "Forge", "Eclipse", "Tango", "Vortex", "Pi",
+  "Whiskey", "Bolt", "Lambda", "Quasar", "Root", "Echo", "Prism", "Gamma",
+  "Stellar", "Node", "Foxtrot", "Zenith", "Psi", "Spark", "Helix", "Romeo",
+  "Core", "Delta", "Cosmo", "Victor", "Theta", "Nexus", "Shell", "Quebec",
+  "Nova", "Kappa", "Pulse", "Orbit", "Charlie", "Zeta", "Cipher", "Lima",
+  "Omega", "Patch", "Astral", "Bravo", "Eta", "Vector", "Mike", "Flux",
+  "Daemon", "Xi", "Photon", "Sierra", "Axiom", "Iota", "Stack", "Hotel",
+  "Phi", "Apex", "Byte", "Juliet", "Tau", "Onyx", "Grid", "Oscar",
+  "Epsilon", "Synth", "Papa", "Vertex", "Mu", "Arc", "India", "Rho",
+  "Matrix", "Golf", "Upsilon", "Proxy", "X-Ray", "Nu", "Aether", "Yankee",
+  "Chi", "Pulsar", "Uniform", "Omicron", "Neo", "Kernel", "Beta", "Quantum",
+  "Zero", "Prime",
+];
+
+/**
+ * Get the display name for the main (primary) session.
+ * Rick → "Rick C-137", anything else → "{agentName} Alpha".
+ */
+export function getMainSessionName(): string {
+  if (config.agentName.toLowerCase() === "rick") return "Rick C-137";
+  return `${config.agentName} Alpha`;
+}
+
+/**
+ * Get a variant name for a sub-agent session.
+ *
+ * Uses sequential rotation per user: the Nth session for a user gets name[N % len].
+ * Falls back to hash-based naming if no userId is available.
+ *
+ * When agentName is "Rick", uses canonical Rick and Morty character names.
+ * Otherwise, uses "{agentName} {suffix}" with generic suffixes.
+ */
+export async function getSessionVariantName(sessionId: string, numericUserId?: number | null): Promise<string> {
+  const isRick = config.agentName.toLowerCase() === "rick";
+  const names = isRick ? RICK_VARIANT_NAMES : GENERIC_VARIANT_SUFFIXES;
+
+  let index: number;
+
+  if (numericUserId) {
+    // Sequential rotation: count how many sessions this user has had before this one
+    try {
+      const result = await query(
+        `SELECT COUNT(*) AS cnt FROM sub_agent_sessions WHERE user_id = $1 AND id != $2`,
+        [numericUserId, sessionId],
+      );
+      index = parseInt(result.rows[0]?.cnt ?? "0", 10);
+    } catch {
+      // Fallback to hash if DB query fails
+      index = hashString(sessionId);
+    }
+  } else {
+    // No user context — use deterministic hash of sessionId
+    index = hashString(sessionId);
+  }
+
+  if (isRick) {
+    return names[index % names.length];
+  }
+  return `${config.agentName} ${names[index % names.length]}`;
+}
+
+/** Synchronous hash-based fallback (for cases without DB access, e.g. frontend). */
 function hashString(str: string): number {
   let h = 0;
   for (let i = 0; i < str.length; i++) {
@@ -36,12 +151,6 @@ function hashString(str: string): number {
     h |= 0;
   }
   return Math.abs(h);
-}
-
-/** Get a variant name for a session ID (deterministic, matches frontend). */
-export function getSessionRickName(sessionId: string): string {
-  const suffix = VARIANT_SUFFIXES[hashString(sessionId) % VARIANT_SUFFIXES.length];
-  return `${config.agentName} ${suffix}`;
 }
 
 /**
@@ -148,18 +257,25 @@ export class SessionManager {
         let connectorName = "web";
         let userId = "owner";
         let numericUserId: number | null = null;
+        let variantName: string | undefined;
         try {
           const dbRow = await query(
-            `SELECT connector_name, user_external_id, user_id FROM sub_agent_sessions WHERE id = $1`,
+            `SELECT connector_name, user_external_id, user_id, variant_name FROM sub_agent_sessions WHERE id = $1`,
             [id]
           );
           if (dbRow.rows.length > 0) {
             connectorName = dbRow.rows[0].connector_name || "web";
             userId = dbRow.rows[0].user_external_id || "owner";
             numericUserId = dbRow.rows[0].user_id ?? null;
+            variantName = dbRow.rows[0].variant_name || undefined;
           }
         } catch (err) {
           logger.warn({ err, sessionId: id }, "Session recovery: failed to restore routing metadata from DB, using defaults");
+        }
+
+        // If variant_name wasn't persisted (old session), compute it now
+        if (!variantName) {
+          variantName = await getSessionVariantName(id, numericUserId);
         }
 
         const session: SubAgentSession = {
@@ -172,6 +288,7 @@ export class SessionManager {
           connectorName,
           userId,
           numericUserId,
+          variantName,
           output: "",
           pendingQuestion: null,
           recovered: true,
@@ -217,21 +334,24 @@ export class SessionManager {
   }
 
   /**
-   * Look up the persisted status of a session from the DB.
-   * Returns 'active' | 'done' | 'killed' | null (not found).
+   * Look up the persisted status and variant name of a session from the DB.
+   * Returns { status, variantName } or null if not found.
    */
-  async getSessionStatusFromDB(sessionId: string): Promise<string | null> {
+  async getSessionInfoFromDB(sessionId: string): Promise<{ status: string; variantName: string | null } | null> {
     try {
       const result = await query(
-        `SELECT status FROM sub_agent_sessions WHERE id = $1`,
+        `SELECT status, variant_name FROM sub_agent_sessions WHERE id = $1`,
         [sessionId]
       );
       if (result.rows.length > 0) {
-        return result.rows[0].status;
+        return {
+          status: result.rows[0].status,
+          variantName: result.rows[0].variant_name || null,
+        };
       }
       return null;
     } catch (err) {
-      logger.warn({ err, sessionId }, "Failed to query session status from DB");
+      logger.warn({ err, sessionId }, "Failed to query session info from DB");
       return null;
     }
   }
@@ -331,6 +451,9 @@ export class SessionManager {
     const id = randomBytes(8).toString("hex");
     const containerName = `subagent-${id}`;
 
+    // Compute variant name before persisting so it's available immediately
+    const variantName = await getSessionVariantName(id, numericUserId);
+
     const session: SubAgentSession = {
       id,
       containerId: null,
@@ -341,6 +464,7 @@ export class SessionManager {
       connectorName,
       userId,
       numericUserId: numericUserId ?? null,
+      variantName,
       output: "",
       pendingQuestion: null,
       createdAt: Date.now(),
@@ -828,11 +952,11 @@ export class SessionManager {
     if (!session.numericUserId) return;
     try {
       await query(
-        `INSERT INTO sub_agent_sessions (id, user_id, task, status, connector_name, user_external_id, started_at)
-         VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        `INSERT INTO sub_agent_sessions (id, user_id, task, status, connector_name, user_external_id, variant_name, started_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
          ON CONFLICT (id) DO NOTHING`,
         [session.id, session.numericUserId, session.taskDescription || null, "active",
-          session.connectorName, session.userId]
+          session.connectorName, session.userId, session.variantName || null]
       );
     } catch (err) {
       logger.warn({ err, sessionId: session.id }, "Failed to persist session to DB");

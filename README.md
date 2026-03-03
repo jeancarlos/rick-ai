@@ -128,7 +128,7 @@ All delegated tasks (coding, research, browser automation) are handled by a **si
 - **Image freshness**: `subagent` image is rebuilt automatically whenever bundle hash or Rick version label differs (no stale image reuse across versions)
 - **Centralized image builder**: main container warms the `subagent` image in background at startup; new sessions reuse `subagent:current`, while a new version builds in the background and is promoted atomically when ready
 
-Each sub-agent gets a unique Rick variant name (Rick Prime, Pickle Rick, Evil Rick, etc.) for easy identification.
+Each sub-agent gets a unique variant name assigned sequentially per user. When `AGENT_NAME=Rick`, names come from canonical Rick and Morty characters (Pickle Rick, Evil Rick, Doofus Rick, etc. — 130+ variants). For other agent names, generic suffixes are used (Alpha, Beta, Quantum, Nebula, etc. — 90+ variants). Names are persisted in the `variant_name` column and served to all clients from the server.
 
 ### Self-Editing (`/edit` mode)
 
@@ -401,8 +401,8 @@ audio_blobs (id, data BYTEA, mime_type, created_at)
 session_messages (id, session_id, user_id, role, content, created_at)
   -- Sub-agent conversation history (preserved after kill for admin audit)
 sub_agent_sessions (id, user_id, task, status, started_at, ended_at,
-                    connector_name, user_external_id)
-  -- Persisted session audit trail
+                    connector_name, user_external_id, variant_name)
+  -- Persisted session audit trail (variant_name stores the assigned sub-agent display name)
 config_store (key, value, updated_at)
   -- Runtime config persistence (API keys, settings from Web UI)
 ```
