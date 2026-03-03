@@ -57,6 +57,75 @@ for (let i = 0; i < rawArgs.length; i++) {
   }
 }
 
+// ── Rick API client (for querying/saving memories) ──────────────────────────
+
+const RICK_API_URL = process.env.RICK_API_URL || "";
+const RICK_SESSION_TOKEN = process.env.RICK_SESSION_TOKEN || "";
+
+async function rickApiGet(path) {
+  if (!RICK_API_URL || !RICK_SESSION_TOKEN) return null;
+  try {
+    const res = await fetch(`${RICK_API_URL}${path}`, {
+      headers: { Authorization: `Bearer ${RICK_SESSION_TOKEN}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function rickApiPost(path, body) {
+  if (!RICK_API_URL || !RICK_SESSION_TOKEN) return { error: "API não configurada" };
+  try {
+    const res = await fetch(`${RICK_API_URL}${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${RICK_SESSION_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(5000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: data.error || `HTTP ${res.status}` };
+    return data;
+  } catch (err) {
+    return { error: err.message || "timeout/rede" };
+  }
+}
+
+// ── Agent-specific tool handler (rick_memory, rick_search, rick_save_memory) ─
+
+const agentName = process.env.AGENT_NAME || "Rick";
+
+async function editToolHandler(name, input) {
+  switch (name) {
+    case "rick_memory": {
+      const data = await rickApiGet(`/api/agent/memories${input.category ? `?category=${encodeURIComponent(input.category)}` : ""}`);
+      if (!data) return "Não foi possível acessar as memórias.";
+      return JSON.stringify(data.memories || [], null, 2);
+    }
+    case "rick_search": {
+      const data = await rickApiGet(`/api/agent/search?q=${encodeURIComponent(input.query)}&limit=${input.limit || 5}`);
+      if (!data) return "Busca não disponível.";
+      return JSON.stringify(data.results || [], null, 2);
+    }
+    case "rick_save_memory": {
+      const data = await rickApiPost("/api/agent/memory", {
+        key: input.key,
+        value: input.value,
+        category: input.category || "geral",
+      });
+      if (data.error) return `Erro ao salvar memória: ${data.error}`;
+      return `Memória salva: [${data.category}] ${data.key}`;
+    }
+    default:
+      return undefined;
+  }
+}
+
 // ── NDJSON helpers ───────────────────────────────────────────────────────────
 function emitText(text) {
   process.stdout.write(
@@ -96,8 +165,43 @@ function saveHistory(messages) {
   try { writeFileSync(HISTORY_FILE, JSON.stringify(messages, null, 2), "utf-8"); } catch {}
 }
 
-// ── Tool declarations (use shared core set) ─────────────────────────────────
-const toolDeclarations = coreToolDeclarations;
+// ── Tool declarations (core + memory tools) ─────────────────────────────────
+const toolDeclarations = [
+  ...coreToolDeclarations,
+  {
+    name: "rick_memory",
+    description: `Lista memórias salvas pelo ${agentName} (credenciais, links, preferências). Sem categoria retorna TODAS.`,
+    parameters: {
+      type: "object",
+      properties: { category: { type: "string", description: "Categoria opcional: credenciais, senhas, geral, pessoal, notas, preferencias. Omita para listar TODAS." } },
+    },
+  },
+  {
+    name: "rick_search",
+    description: `Busca semântica nas conversas e memórias do ${agentName}.`,
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Texto para buscar por significado" },
+        limit: { type: "number", description: "Número máximo de resultados (padrão: 5)" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "rick_save_memory",
+    description: `Salva informação na memória persistente do ${agentName}. Use para URLs, preferências, padrões. NÃO use para credenciais/senhas.`,
+    parameters: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: "Identificador curto (ex: 'github_org_zydon')" },
+        value: { type: "string", description: "Valor a salvar" },
+        category: { type: "string", description: "Categoria: geral, notas, preferencias, projetos, links. Padrão: geral." },
+      },
+      required: ["key", "value"],
+    },
+  },
+];
 
 // ── Generic agentic loop (Strategy pattern) ──────────────────────────────────
 /**
@@ -126,7 +230,7 @@ async function agenticLoop(adapter) {
       const results = [];
       for (const tc of toolCalls) {
         emitToolUse(tc.name, tc.input);
-        const result = await executeTool(tc.name, tc.input);
+        const result = await executeTool(tc.name, tc.input, editToolHandler);
         results.push({ ...tc, result: String(result) });
       }
       state = adapter.addToolResults(state, results);
