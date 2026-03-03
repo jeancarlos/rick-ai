@@ -1049,13 +1049,9 @@ export class WebConnector implements Connector {
       this.broadcastToAuthenticated(respPayload);
     }
 
-    // Send typing:false AFTER the message is delivered to ensure
-    // the typing indicator stays visible until the message appears.
-    this.broadcastToAuthenticated({ type: "typing", composing: false });
-    // Also notify main session viewers
-    if (this.adminUserId) {
-      this.broadcastTypingToMainViewers(this.adminUserId, false);
-    }
+    // NOTE: typing:false is handled by agent.ts with generation-awareness.
+    // Do NOT send typing:false here - it would override the generation logic
+    // and turn off the indicator prematurely when messages are superseded.
   }
 
   // ==================== Settings ====================
