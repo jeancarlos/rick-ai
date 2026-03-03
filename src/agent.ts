@@ -143,24 +143,22 @@ export class Agent {
    * Two messages from the same user are processed sequentially, never concurrently.
    * Called by ConnectorManager when any connector receives a message.
    * 
-   * IMPORTANT: AbortController is created HERE (before queueing) and abort is
-   * triggered IMMEDIATELY when a new message arrives. This ensures in-flight
-   * LLM requests are cancelled as soon as possible.
+   * When multiple messages arrive quickly, only the LAST one generates a response.
+   * Earlier messages are saved to history but their LLM responses are discarded.
+   * This is achieved by checking the generation number before sending any response.
    */
   async handleMessage(msg: IncomingMessage): Promise<string> {
     const { userId } = msg;
 
-    // Abort any in-flight request IMMEDIATELY — don't wait for the queue.
-    // This ensures the LLM request is cancelled as soon as the new message arrives.
-    const wasInterrupted = this.interruptUser(userId);
-    logger.info({ userId, wasInterrupted, text: msg.text?.substring(0, 30) }, "handleMessage: new message arrived");
-
-    // Create AbortController NOW, before entering the queue.
-    // This way, if another message arrives while we're waiting in the queue,
-    // it can abort our controller immediately.
-    const abortController = new AbortController();
+    // Increment generation counter. Each message gets a unique generation number.
+    // Only the message with the HIGHEST generation number will send a response.
     const generation = (this.userGenerations.get(userId) ?? 0) + 1;
     this.userGenerations.set(userId, generation);
+
+    logger.info({ userId, generation, text: msg.text?.substring(0, 30) }, "handleMessage: new message arrived");
+
+    // Create AbortController for this request (used to cancel LLM calls)
+    const abortController = new AbortController();
     this.userAbortControllers.set(userId, { controller: abortController, generation });
 
     const prev = this.messageQueue.get(userId) ?? Promise.resolve("");
@@ -201,6 +199,15 @@ export class Agent {
     }
   }
 
+  /**
+   * Check if this generation is still the latest for the user.
+   * Returns true if a newer message has arrived and we should skip sending response.
+   */
+  private isSuperseded(userId: string, generation: number): boolean {
+    const currentGen = this.userGenerations.get(userId) ?? 0;
+    return generation < currentGen;
+  }
+
   private async handleMessageInternal(msg: IncomingMessage, signal: AbortSignal, generation: number): Promise<string> {
     const { connectorName, userId: userPhone, userName, text: rawText, media, imageMedias, quotedText, audioUrl, imageUrls, fileInfos } = msg;
     const numericUserId = msg.numericUserId;
@@ -208,7 +215,8 @@ export class Agent {
     // For connectors (WhatsApp), userRole comes from resolveUser() and can be null (pending).
     const userRole: UserRole = msg.userRole !== undefined ? msg.userRole : "admin";
 
-    logger.info({ userPhone, generation, aborted: signal.aborted, text: rawText?.substring(0, 30) }, "handleMessageInternal: starting");
+    const currentGen = this.userGenerations.get(userPhone) ?? 0;
+    logger.info({ userPhone, generation, currentGen, text: rawText?.substring(0, 30) }, "handleMessageInternal: starting");
 
     // Get or create user — always yields a numeric user.id for DB operations.
     // When RBAC is active (numericUserId available), the user was already resolved by the connector.
@@ -217,16 +225,16 @@ export class Agent {
       ? { id: numericUserId, phone: userPhone, displayName: userName || null }
       : await this.memory.getOrCreateUser(userPhone, userName);
 
-    // Save user message EARLY so it appears in history even if request is aborted.
+    // Save user message EARLY so it appears in history even if request is superseded.
     // This ensures subsequent messages have full context of what user said.
     await this.memory.saveMessageByUserId(user.id, "user", rawText, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
     const userMediaInfo = (audioUrl || (imageUrls && imageUrls.length > 0) || (fileInfos && fileInfos.length > 0))
       ? { audioUrl, imageUrls, fileInfos } : undefined;
     this.notifyMainViewers(user.id, "user", rawText, "text", connectorName, userMediaInfo);
 
-    // Check if aborted AFTER saving user message (so context is preserved)
-    if (signal.aborted) {
-      logger.info({ userPhone, generation }, "Request aborted — user message saved, skipping LLM response");
+    // Check if superseded by newer message AFTER saving user message
+    if (this.isSuperseded(userPhone, generation)) {
+      logger.info({ userPhone, generation, currentGen: this.userGenerations.get(userPhone) }, "Superseded by newer message — skipping response");
       return "";
     }
 
@@ -425,9 +433,9 @@ export class Agent {
       const canDelegate = canInvokeSubAgent(userRole);
       const classification = canDelegate ? await classifyTask(fullText, signal) : null;
 
-      // Check if aborted during classification — if so, bail out silently
-      if (signal.aborted) {
-        logger.info({ userPhone }, "Request aborted during classification — skipping response");
+      // Check if superseded by newer message after classification
+      if (this.isSuperseded(userPhone, generation)) {
+        logger.info({ userPhone, generation }, "Superseded after classification — skipping response");
         return "";
       }
 
@@ -474,7 +482,7 @@ export class Agent {
       } else if (!routingMedia && imageMedias && imageMedias.length > 0) {
         allMedia = imageMedias.length === 1 ? imageMedias[0] : imageMedias;
       }
-      return this.handleSimpleChat(userPhone, user.displayName, fullText, allMedia, audioUrl, imageUrls, fileInfos, userRole, user.id, connectorName, signal);
+      return this.handleSimpleChat(userPhone, user.displayName, fullText, allMedia, audioUrl, imageUrls, fileInfos, userRole, user.id, connectorName, signal, generation);
     } finally {
       // Clean up abort controller for this generation (only if it's still the current one)
       const currentState = this.userAbortControllers.get(userPhone);
@@ -503,7 +511,8 @@ export class Agent {
     userRole: UserRole = "admin",
     userId?: number,
     connectorName?: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    generation?: number
   ): Promise<string> {
     // RBAC: Use global memory context with role-based filtering
     const memoryContext = await this.memory.buildGlobalMemoryContext(userRole);
@@ -541,10 +550,10 @@ export class Agent {
       return `Erro no Gemini: ${err.message?.substring(0, 200) || "erro desconhecido"}.\nTente novamente em alguns segundos.`;
     }
 
-    // Final abort check: even if LLM completed, don't send response if aborted
-    // This handles the race condition where LLM finishes just as abort arrives
-    if (signal?.aborted) {
-      logger.info({ userPhone }, "LLM completed but request was aborted — discarding response");
+    // Final check: if superseded by newer message, discard this response
+    // This is the KEY check that prevents multiple responses
+    if (generation !== undefined && this.isSuperseded(userPhone, generation)) {
+      logger.info({ userPhone, generation, currentGen: this.userGenerations.get(userPhone) }, "LLM completed but superseded — discarding response");
       return "";
     }
 
