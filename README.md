@@ -149,6 +149,7 @@ The Web UI (`https://rick.barroso.tec.br`) provides a full browser-based interfa
 - **Chat**: Send text, record audio (transcribed via Gemini), upload images (single or multi-image)
 - **User management**: View pending/active/blocked users, assign roles (dev/business), block/unblock, view user profiles, conversation history, and sub-agent sessions. Pending user badge with real-time count updates.
 - **Sub-agent sessions**: View active sessions, send follow-up messages, kill sessions, view session history
+- **Public main-session viewer**: Shareable link (`/m/:token`) for real-time main conversation with full media support (text, audio recording, file attachments, paste images)
 - **Public session viewer**: Shareable link (`/s/:sessionId`) for real-time sub-agent output
 - **Public sessions dashboard**: Per-user sessions list (`/u/:token`) with all sessions ordered by last activity, linking to individual session viewers
 - **Settings panel**: View/edit API keys, database URLs, agent config — all persisted via config store
@@ -193,6 +194,7 @@ There are no slash commands — all interaction is via natural language. The age
 |----------|--------|------|-------------|
 | `/health` | GET | None | Health check (JSON: status, uptime, WhatsApp/Postgres/pgvector) |
 | `/` | GET | None | Web UI (single HTML page) |
+| `/m/:token` | GET | None | Public main-session viewer (per-user, text + audio + files) |
 | `/s/:sessionId` | GET | None | Public sub-agent session viewer |
 | `/u/:token` | GET | None | Public sessions dashboard (per-user, deterministic token) |
 | `/api/sessions/:token` | GET | None | Sessions list API (returns JSON with user's sessions) |
@@ -214,6 +216,7 @@ WebSocket endpoints:
 | Endpoint | Auth | Description |
 |----------|------|-------------|
 | `ws://host/ws` | Password | Authenticated Web UI real-time chat + settings + user management |
+| `ws://host/ws/main?t=<token>` | Token | Public main-session viewer real-time chat (text + audio + files) |
 | `ws://host/ws/session?id=<id>` | None | Public session viewer real-time messages |
 
 WebSocket message types (admin-only, via `/ws`):
@@ -252,6 +255,7 @@ rick-ai/
 │   │   ├── whatsapp.ts                # WhatsApp connector (Baileys v7, self-chat, polls, media)
 │   │   ├── web.ts                     # Web UI connector (WebSocket, settings, sessions, OAuth)
 │   │   ├── web-ui.html                # Web UI frontend (single HTML file)
+│   │   ├── main-session-viewer.html   # Public main-session viewer page (text + audio + files)
 │   │   ├── session-viewer.html        # Public sub-agent session viewer page
 │   │   └── sessions-list.html        # Public sessions dashboard (per-user)
 │   ├── llm/

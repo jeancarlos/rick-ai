@@ -55,14 +55,14 @@ export class Agent {
   /** Reference to web bridge for sending transcription events etc. */
   private webBridge: WebAgentBridge | null = null;
   /** Callback for broadcasting main-session messages to public viewers */
-  private mainSessionCallback: ((userId: number, role: string, text: string, messageType?: string, connectorName?: string) => void) | null = null;
+  private mainSessionCallback: ((userId: number, role: string, text: string, messageType?: string, connectorName?: string, mediaInfo?: { audioUrl?: string; imageUrls?: string[]; fileInfos?: Array<{ url: string; name: string; mimeType: string }> }) => void) | null = null;
   /** Callback for broadcasting typing state to public main-session viewers */
   private mainTypingCallback: ((userId: number, composing: boolean) => void) | null = null;
 
   /** Notify main session viewers of a new message (fire-and-forget). */
-  private notifyMainViewers(userId: number, role: string, text: string, messageType?: string, connectorName?: string): void {
+  private notifyMainViewers(userId: number, role: string, text: string, messageType?: string, connectorName?: string, mediaInfo?: { audioUrl?: string; imageUrls?: string[]; fileInfos?: Array<{ url: string; name: string; mimeType: string }> }): void {
     if (this.mainSessionCallback) {
-      try { this.mainSessionCallback(userId, role, text, messageType, connectorName); } catch {}
+      try { this.mainSessionCallback(userId, role, text, messageType, connectorName, mediaInfo); } catch {}
     }
   }
 
@@ -434,7 +434,9 @@ export class Agent {
 
     // Save user message BEFORE the LLM call so it persists even if the call fails/crashes
     await this.memory.saveMessageByUserId(userId!, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
-    this.notifyMainViewers(userId!, "user", text, "text", connectorName);
+    const userMediaInfo = (audioUrl || (imageUrls && imageUrls.length > 0) || (fileInfos && fileInfos.length > 0))
+      ? { audioUrl, imageUrls, fileInfos } : undefined;
+    this.notifyMainViewers(userId!, "user", text, "text", connectorName, userMediaInfo);
 
     let response;
     try {
@@ -586,7 +588,9 @@ export class Agent {
 
       const missingList = missing.map((m) => `*${m}*`).join(", ");
       await this.memory.saveMessageByUserId(userId!, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
-      this.notifyMainViewers(userId!, "user", userMessage, "text", connectorName);
+      const missingMediaInfo = (audioUrl || (imageUrls && imageUrls.length > 0) || (fileInfos && fileInfos.length > 0))
+        ? { audioUrl, imageUrls, fileInfos } : undefined;
+      this.notifyMainViewers(userId!, "user", userMessage, "text", connectorName, missingMediaInfo);
       return `Vou precisar de credenciais para ${missingList} pra fazer isso.\n\nMe manda as credenciais de *${missing[0]}* (usuario, senha, token, o que for necessario).`;
     }
 
@@ -595,7 +599,9 @@ export class Agent {
     }
 
     await this.memory.saveMessageByUserId(userId!, "user", userMessage, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
-    this.notifyMainViewers(userId!, "user", userMessage, "text", connectorName);
+    const delegateMediaInfo = (audioUrl || (imageUrls && imageUrls.length > 0) || (fileInfos && fileInfos.length > 0))
+      ? { audioUrl, imageUrls, fileInfos } : undefined;
+    this.notifyMainViewers(userId!, "user", userMessage, "text", connectorName, delegateMediaInfo);
 
     // Start the sub-agent container
     let session;
@@ -851,7 +857,9 @@ export class Agent {
 
     // CASE 2: Continuation — relay to the most recent done session
     await this.memory.saveMessageByUserId(userId!, "user", text, undefined, undefined, audioUrl, imageUrls, undefined, fileInfos, connectorName);
-    this.notifyMainViewers(userId!, "user", text, "text", connectorName);
+    const relayMediaInfo = (audioUrl || (imageUrls && imageUrls.length > 0) || (fileInfos && fileInfos.length > 0))
+      ? { audioUrl, imageUrls, fileInfos } : undefined;
+    this.notifyMainViewers(userId!, "user", text, "text", connectorName, relayMediaInfo);
 
     this.sessionManager.sendToSession(mostRecent.id, text, imageMedias, audioUrl, imageUrls, fileInfos).catch(async (err) => {
       logger.error({ err }, "Sub-agent relay failed");
@@ -1770,7 +1778,7 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         return this.memory.getConversationHistoryByUserId(userId, limit);
       },
 
-      handleMainViewerMessage: async (numericUserId: number, userExternalId: string, text: string, userName?: string, userRole?: string) => {
+      handleMainViewerMessage: async (numericUserId: number, userExternalId: string, text: string, userName?: string, userRole?: string, media?: import("./llm/types.js").MediaAttachment, imageMedias?: import("./llm/types.js").MediaAttachment[], audioUrl?: string, imageUrls?: string[], fileInfos?: Array<{ url: string; name: string; mimeType: string }>) => {
         const validRoles = ["admin", "dev", "business"];
         const resolvedRole = userRole && validRoles.includes(userRole) ? userRole as "admin" | "dev" | "business" : "admin";
         const incoming: IncomingMessage = {
@@ -1779,6 +1787,11 @@ Retorne APENAS as linhas de extracao, nada mais.`;
           userName: userName || undefined,
           numericUserId,
           text,
+          media,
+          imageMedias: imageMedias && imageMedias.length > 0 ? imageMedias : undefined,
+          audioUrl,
+          imageUrls: imageUrls && imageUrls.length > 0 ? imageUrls : undefined,
+          fileInfos: fileInfos && fileInfos.length > 0 ? fileInfos : undefined,
           userRole: resolvedRole,
           userStatus: "active",
           skipSubAgentRelay: true,
@@ -1786,7 +1799,7 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         return this.handleMessage(incoming);
       },
 
-      setMainSessionCallback: (cb: (userId: number, role: string, text: string, messageType?: string, connectorName?: string) => void) => {
+      setMainSessionCallback: (cb: (userId: number, role: string, text: string, messageType?: string, connectorName?: string, mediaInfo?: { audioUrl?: string; imageUrls?: string[]; fileInfos?: Array<{ url: string; name: string; mimeType: string }> }) => void) => {
         this.mainSessionCallback = cb;
       },
 

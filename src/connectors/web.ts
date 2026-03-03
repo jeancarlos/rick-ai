@@ -75,9 +75,9 @@ export interface WebAgentBridge {
   /** Get conversation history for a user by numeric ID (for main session viewer) */
   getConversationHistoryByUserId(userId: number, limit?: number): Promise<Array<{ role: string; content: string; created_at?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }>; message_type?: string; connector_name?: string }>>;
   /** Handle an incoming message from the main session viewer */
-  handleMainViewerMessage(numericUserId: number, userExternalId: string, text: string, userName?: string, userRole?: string): Promise<string>;
+  handleMainViewerMessage(numericUserId: number, userExternalId: string, text: string, userName?: string, userRole?: string, media?: MediaAttachment, imageMedias?: MediaAttachment[], audioUrl?: string, imageUrls?: string[], fileInfos?: Array<{ url: string; name: string; mimeType: string }>): Promise<string>;
   /** Register callback for broadcasting main-session messages to public viewers */
-  setMainSessionCallback(cb: (userId: number, role: string, text: string, messageType?: string, connectorName?: string) => void): void;
+  setMainSessionCallback(cb: (userId: number, role: string, text: string, messageType?: string, connectorName?: string, mediaInfo?: { audioUrl?: string; imageUrls?: string[]; fileInfos?: Array<{ url: string; name: string; mimeType: string }> }) => void): void;
   /** Register callback for broadcasting typing state to public main-session viewers */
   setMainTypingCallback(cb: (userId: number, composing: boolean) => void): void;
 }
@@ -150,8 +150,8 @@ export class WebConnector implements Connector {
   setAgentBridge(bridge: WebAgentBridge): void {
     this.agentBridge = bridge;
     // Register callback so main-session viewers get real-time updates
-    bridge.setMainSessionCallback((userId, role, text, messageType, connectorName) => {
-      this.broadcastToMainViewers(userId, role, text, messageType);
+    bridge.setMainSessionCallback((userId, role, text, messageType, connectorName, mediaInfo) => {
+      this.broadcastToMainViewers(userId, role, text, messageType, mediaInfo);
     });
     // Register typing callback so main-session viewers see "Digitando..."
     bridge.setMainTypingCallback((userId, composing) => {
@@ -577,16 +577,13 @@ export class WebConnector implements Connector {
           ws.send(JSON.stringify({ type: "typing", composing: true }));
         }
 
-        // Handle messages from main session viewer
+        // Handle messages from main session viewer (supports text, audio, files)
         ws.on("message", async (data: Buffer | string) => {
           try {
             const raw = typeof data === "string" ? data : data.toString("utf-8");
             const msg = JSON.parse(raw);
 
-            if (msg.type === "message" && this.agentBridge && msg.text) {
-              // Process message through the agent.
-              // The agent's notifyMainViewers callback handles broadcasting
-              // both the user echo and agent response to all viewers.
+            if (msg.type === "message" && this.agentBridge) {
               try {
                 // Get user's external ID, display name, and role for routing
                 const userRow = await query(`SELECT phone, display_name, role FROM users WHERE id = $1`, [userId]);
@@ -594,7 +591,137 @@ export class WebConnector implements Connector {
                 const userDisplayName = userRow.rows[0]?.display_name || undefined;
                 const userRole = userRow.rows[0]?.role || "admin";
 
-                const response = await this.agentBridge.handleMainViewerMessage(userId, userExternalId, msg.text, userDisplayName, userRole);
+                // Process audio and files (same logic as handleClientMessage)
+                let media: MediaAttachment | undefined;
+                const imageMedias: MediaAttachment[] = [];
+                let audioUrl: string | undefined;
+                const imageUrls: string[] = [];
+                const fileTexts: string[] = [];
+                const fileInfos: Array<{ url: string; name: string; mimeType: string }> = [];
+                let imageAttachmentCount = 0;
+                let attachmentCount = 0;
+
+                const genId = () => Array.from({ length: 8 }, () =>
+                  Math.floor(Math.random() * 256).toString(16).padStart(2, "0")
+                ).join("");
+
+                // Process audio
+                const audioMime = msg.audioMimeType || msg.mimeType;
+                if (msg.audio && audioMime) {
+                  const buffer = Buffer.from(msg.audio, "base64");
+                  media = { data: buffer, mimeType: audioMime };
+                  logger.info({ type: "audio", size: buffer.length, mimeType: audioMime }, "Main viewer audio received");
+                  try {
+                    const id = genId();
+                    await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, audioMime]);
+                    audioUrl = `/audio/${id}`;
+                  } catch (err) {
+                    logger.error({ err }, "Failed to save audio blob (main viewer)");
+                  }
+                }
+
+                // Process files
+                const files: Array<{ base64: string; mimeType: string; name?: string }> = [];
+                if (msg.files && Array.isArray(msg.files)) {
+                  for (const f of msg.files) {
+                    if (f.base64 && f.mimeType) files.push(f);
+                  }
+                }
+
+                for (const f of files) {
+                  const buffer = Buffer.from(f.base64, "base64");
+
+                  if (f.mimeType.startsWith("image/")) {
+                    imageMedias.push({ data: buffer, mimeType: f.mimeType });
+                    imageAttachmentCount += 1;
+                    attachmentCount += 1;
+                    try {
+                      const id = genId();
+                      await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
+                      imageUrls.push(`/img/${id}`);
+                    } catch (err) {
+                      logger.error({ err }, "Failed to save image blob (main viewer)");
+                    }
+                  } else if (
+                    f.mimeType.startsWith("text/") ||
+                    f.mimeType === "application/json" ||
+                    f.mimeType === "application/xml" ||
+                    f.mimeType === "application/javascript"
+                  ) {
+                    const content = buffer.toString("utf-8");
+                    const fileName = f.name || "arquivo";
+                    fileTexts.push(`\n\n[Conteúdo do arquivo "${fileName}"]:\n${content}`);
+                    attachmentCount += 1;
+                    try {
+                      const id = genId();
+                      await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
+                      fileInfos.push({ url: `/file/${id}`, name: fileName, mimeType: f.mimeType });
+                    } catch (err) {
+                      logger.error({ err }, "Failed to save text file blob (main viewer)");
+                    }
+                  } else if (f.mimeType === "application/pdf") {
+                    imageMedias.push({ data: buffer, mimeType: f.mimeType });
+                    attachmentCount += 1;
+                    try {
+                      const id = genId();
+                      await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
+                      imageUrls.push(`/img/${id}`);
+                    } catch (err) {
+                      logger.error({ err }, "Failed to save PDF blob (main viewer)");
+                    }
+                  } else {
+                    const fileName = f.name || "arquivo";
+                    attachmentCount += 1;
+                    try {
+                      const id = genId();
+                      await query(`INSERT INTO audio_blobs (id, data, mime_type) VALUES ($1, $2, $3)`, [id, buffer, f.mimeType]);
+                      fileInfos.push({ url: `/file/${id}`, name: fileName, mimeType: f.mimeType });
+                    } catch (err) {
+                      logger.error({ err }, "Failed to save generic file blob (main viewer)");
+                    }
+                  }
+                }
+
+                // If no audio, first image becomes primary media
+                if (!media && imageMedias.length > 0) {
+                  media = imageMedias.shift();
+                }
+
+                // Build prompt text
+                const text = msg.text || "";
+                const hasAttachments = attachmentCount > 0 || (!!media && !msg.audio);
+                const hasImages = imageAttachmentCount > 0;
+                let promptText: string;
+
+                if (media && msg.audio && hasAttachments) {
+                  promptText = text || "O usuario enviou um audio e arquivos anexados.";
+                } else if (media && msg.audio) {
+                  promptText = text || "O usuario enviou um audio. Ouca, entenda e responda naturalmente.";
+                } else if (hasAttachments) {
+                  if (hasImages && attachmentCount === imageAttachmentCount) {
+                    const count = imageAttachmentCount;
+                    promptText = text || (count > 1
+                      ? `O usuario enviou ${count} imagens. Analise e descreva o que voce ve.`
+                      : "O usuario enviou uma imagem. Analise a imagem e descreva o que voce ve.");
+                  } else {
+                    promptText = text || "O usuario enviou arquivos anexados. Leia-os e responda com base neles.";
+                  }
+                } else {
+                  promptText = text;
+                }
+
+                if (fileTexts.length > 0) {
+                  promptText = (promptText || "") + fileTexts.join("");
+                }
+
+                if (!promptText && !media) return;
+
+                const response = await this.agentBridge.handleMainViewerMessage(
+                  userId, userExternalId, promptText, userDisplayName, userRole,
+                  media, imageMedias.length > 0 ? imageMedias : undefined,
+                  audioUrl, imageUrls.length > 0 ? imageUrls : undefined,
+                  fileInfos.length > 0 ? fileInfos : undefined,
+                );
 
                 // If last user message (before this one) was from WhatsApp,
                 // also relay the agent response to WhatsApp
@@ -1324,11 +1451,15 @@ export class WebConnector implements Connector {
    * Broadcast a message to all main session viewers for a given user.
    * Called when a message is sent/received in the main session (from any connector).
    */
-  broadcastToMainViewers(userId: number, role: string, text: string, messageType?: string): void {
+  broadcastToMainViewers(userId: number, role: string, text: string, messageType?: string, mediaInfo?: { audioUrl?: string; imageUrls?: string[]; fileInfos?: Array<{ url: string; name: string; mimeType: string }> }): void {
     const subs = this.mainViewerSubscribers.get(userId);
     if (!subs || subs.size === 0) return;
 
-    const payload = JSON.stringify({ type: "message", role, text, messageType: messageType || "text", time: new Date().toISOString() });
+    const msg: Record<string, any> = { type: "message", role, text, messageType: messageType || "text", time: new Date().toISOString() };
+    if (mediaInfo?.audioUrl) msg.audioUrl = mediaInfo.audioUrl;
+    if (mediaInfo?.imageUrls && mediaInfo.imageUrls.length > 0) msg.imageUrls = mediaInfo.imageUrls;
+    if (mediaInfo?.fileInfos && mediaInfo.fileInfos.length > 0) msg.fileInfos = mediaInfo.fileInfos;
+    const payload = JSON.stringify(msg);
     for (const ws of subs) {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(payload);
