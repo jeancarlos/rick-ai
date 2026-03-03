@@ -39,3 +39,12 @@ export async function closeVectorPool(): Promise<void> {
     await vectorPool.end();
   }
 }
+
+/**
+ * Check if the vector database is PostgreSQL.
+ * The vector DB is always pgvector (PostgreSQL) — SQLite cannot store vectors.
+ * Returns true when VECTOR_DATABASE_URL is configured.
+ */
+export function isVectorPostgres(): boolean {
+  return !!config.vectorDatabaseUrl;
+}

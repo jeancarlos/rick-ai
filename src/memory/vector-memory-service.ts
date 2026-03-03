@@ -1,6 +1,50 @@
-import { vectorQuery } from "./vector-db.js";
+import { vectorQuery, isVectorPostgres } from "./vector-db.js";
 import { EmbeddingService } from "./embedding-service.js";
 import { logger } from "../config/logger.js";
+import { isPostgres } from "./database.js";
+
+/**
+ * Generate SQL for matching an array of values against a column.
+ * PostgreSQL: `column = ANY($N)` — single placeholder for the array.
+ * SQLite: `column IN (?, ?, ?)` — one placeholder per value.
+ *
+ * @param column - The column name to match against.
+ * @param values - The array of values.
+ * @param startIdx - The starting placeholder index (1-based for PostgreSQL).
+ * @param useVectorDb - If true, check vector DB backend; otherwise check main DB.
+ * @returns { sql, params, nextIdx } where sql is the condition fragment,
+ *          params is the array to spread into query params, and nextIdx is the
+ *          next available placeholder index.
+ */
+function buildInClause(
+  column: string,
+  values: any[],
+  startIdx: number,
+  useVectorDb: boolean = false
+): { sql: string; params: any[]; nextIdx: number } {
+  if (values.length === 0) {
+    // Edge case: empty array — use FALSE condition to match nothing
+    return { sql: "1 = 0", params: [], nextIdx: startIdx };
+  }
+
+  const isPg = useVectorDb ? isVectorPostgres() : isPostgres();
+  if (isPg) {
+    // PostgreSQL: id = ANY($N) — single placeholder for the entire array
+    return {
+      sql: `${column} = ANY($${startIdx})`,
+      params: [values],
+      nextIdx: startIdx + 1,
+    };
+  }
+
+  // SQLite: id IN (?, ?, ?) — one placeholder per value
+  const placeholders = values.map(() => "?").join(", ");
+  return {
+    sql: `${column} IN (${placeholders})`,
+    params: values,
+    nextIdx: startIdx + values.length,
+  };
+}
 
 export interface VectorMemory {
   id: number;
@@ -114,11 +158,12 @@ export class VectorMemoryService {
       const creatorIds = [...new Set(result.rows.map((r: any) => r.created_by).filter(Boolean))];
       if (creatorIds.length > 0) {
         try {
-          // Use main DB query (imported at top of file)
+          // Use main DB query — build IN clause compatible with SQLite/PostgreSQL
           const { query: mainQuery } = await import("./database.js");
+          const { sql: inClause, params: inParams } = buildInClause("id", creatorIds, 1, false);
           const roleResult = await mainQuery(
-            `SELECT id, role FROM users WHERE id = ANY($1)`,
-            [creatorIds]
+            `SELECT id, role FROM users WHERE ${inClause}`,
+            inParams
           );
           const roleMap = new Map(roleResult.rows.map((r: any) => [r.id, r.role]));
           for (const row of result.rows) {
@@ -131,6 +176,7 @@ export class VectorMemoryService {
       }
 
       // Increment hit_count for all returned results (fire-and-forget)
+      // Vector DB is always pgvector (PostgreSQL) — use ANY() directly
       const ids = result.rows.map((r: VectorMemory) => r.id);
       vectorQuery(
         `UPDATE memory_embeddings

@@ -48,16 +48,47 @@ function emitError(message) {
   emit({ type: "error", message });
 }
 
-// ── Provider detection ──────────────────────────────────────────────────────
+// ── Provider detection (dynamic — re-evaluated per turn) ────────────────────
 
-const hasGemini = !!process.env.GEMINI_API_KEY;
-const hasOpenAI = !!(process.env.OPENAI_API_KEY || process.env.OPENAI_ACCESS_TOKEN);
-const hasClaude = !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_ACCESS_TOKEN);
+// Cached tokens fetched from the host API at runtime.
+// These supplement the static env vars for providers connected after session start.
+let cachedClaudeToken = null;
+let cachedOpenAIToken = null;
 
-const providerList = [];
-if (hasClaude) providerList.push("claude");
-if (hasOpenAI) providerList.push("openai");
-if (hasGemini) providerList.push("gemini");
+/**
+ * Check if Claude is available (static API key OR dynamic OAuth token).
+ */
+function hasClaude() {
+  return !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_ACCESS_TOKEN || cachedClaudeToken);
+}
+
+/**
+ * Check if OpenAI is available (static API key OR dynamic OAuth token).
+ */
+function hasOpenAI() {
+  return !!(process.env.OPENAI_API_KEY || process.env.OPENAI_ACCESS_TOKEN || cachedOpenAIToken);
+}
+
+/**
+ * Check if Gemini is available (static API key only — no OAuth for Gemini).
+ */
+function hasGemini() {
+  return !!process.env.GEMINI_API_KEY;
+}
+
+/**
+ * Build the current list of available providers.
+ */
+function getProviderList() {
+  const list = [];
+  if (hasClaude()) list.push("claude");
+  if (hasOpenAI()) list.push("openai");
+  if (hasGemini()) list.push("gemini");
+  return list;
+}
+
+// Initial provider list (may expand after fetching fresh tokens)
+const initialProviderList = getProviderList();
 
 // ── Rick API client (for querying memories/credentials) ─────────────────────
 
@@ -106,6 +137,36 @@ async function rickApiPost(path, body) {
     return data;
   } catch (err) {
     return { error: err.message || "timeout/rede" };
+  }
+}
+
+/**
+ * Refresh LLM tokens from the host API.
+ * Called before each turn to detect providers connected after session start.
+ * Updates cachedClaudeToken / cachedOpenAIToken so has*() functions return true.
+ */
+async function refreshLLMTokens() {
+  if (!RICK_API_URL || !RICK_SESSION_TOKEN) return;
+
+  // Only fetch if we don't have static keys (OAuth is the only dynamic source)
+  const needClaude = !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_ACCESS_TOKEN;
+  const needOpenAI = !process.env.OPENAI_API_KEY && !process.env.OPENAI_ACCESS_TOKEN;
+
+  const fetches = [];
+  if (needClaude) fetches.push(rickApiGet("/api/agent/llm-token?provider=claude").then(d => ({ provider: "claude", data: d })));
+  if (needOpenAI) fetches.push(rickApiGet("/api/agent/llm-token?provider=openai").then(d => ({ provider: "openai", data: d })));
+
+  const results = await Promise.allSettled(fetches);
+  for (const r of results) {
+    if (r.status !== "fulfilled" || !r.value.data) continue;
+    const { provider, data } = r.value;
+    if (data.accessToken) {
+      if (provider === "claude") {
+        cachedClaudeToken = data.accessToken;
+      } else if (provider === "openai") {
+        cachedOpenAIToken = data.accessToken;
+      }
+    }
   }
 }
 
@@ -310,8 +371,13 @@ async function runGeminiLoop(userText) {
 
 async function runOpenAILoop(userText) {
   const apiKey = process.env.OPENAI_API_KEY ?? "";
-  const oauthToken = process.env.OPENAI_ACCESS_TOKEN ?? "";
-  const authHeader = oauthToken ? `Bearer ${oauthToken}` : `Bearer ${apiKey}`;
+  // Prefer static OAuth token, fall back to dynamically cached token
+  const oauthToken = process.env.OPENAI_ACCESS_TOKEN || cachedOpenAIToken || "";
+  const token = oauthToken || apiKey;
+  if (!token) {
+    throw new Error("OpenAI: nenhum token disponível");
+  }
+  const authHeader = `Bearer ${token}`;
   const openaiTools = toolDeclarations.map((t) => ({
     type: "function",
     function: { name: t.name, description: t.description, parameters: t.parameters },
@@ -369,7 +435,8 @@ async function runOpenAILoop(userText) {
 
 async function runClaudeLoop(userText) {
   const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
-  const oauthToken = process.env.ANTHROPIC_ACCESS_TOKEN ?? "";
+  // Prefer static OAuth token, fall back to dynamically cached token
+  const oauthToken = process.env.ANTHROPIC_ACCESS_TOKEN || cachedClaudeToken || "";
   const claudeTools = toolDeclarations.map((t) => ({
     name: t.name,
     description: t.description,
@@ -386,8 +453,10 @@ async function runClaudeLoop(userText) {
     };
     if (oauthToken) {
       headers["Authorization"] = `Bearer ${oauthToken}`;
-    } else {
+    } else if (apiKey) {
       headers["x-api-key"] = apiKey;
+    } else {
+      throw new Error("Claude: nenhum token disponível");
     }
 
     const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -435,13 +504,13 @@ async function runClaudeLoop(userText) {
 
 // ── Main: stdin/stdout event loop ───────────────────────────────────────────
 
-if (providerList.length === 0) {
+if (initialProviderList.length === 0) {
   emitError("Nenhum provedor de LLM disponível. Configure GEMINI_API_KEY, OPENAI_API_KEY, ou ANTHROPIC_API_KEY.");
   process.exit(1);
 }
 
-// Emit ready signal
-emit({ type: "ready", providers: providerList, tools: toolNames });
+// Emit ready signal (initial providers — may expand after refreshLLMTokens)
+emit({ type: "ready", providers: initialProviderList, tools: toolNames });
 
 // Read messages from stdin (NDJSON, one per line)
 const rl = createInterface({ input: process.stdin, terminal: false });
@@ -486,12 +555,22 @@ rl.on("line", async (line) => {
 
   const userText = msg.text;
 
-  // Provider cascade: try each configured provider in priority order.
+  // Refresh LLM tokens from host API — detects providers connected after session start.
+  // This is async but runs quickly (parallel fetches with 5s timeout).
+  await refreshLLMTokens();
+
+  // Provider cascade: try each currently available provider in priority order.
+  // Re-evaluated per turn to detect providers added since session start.
   // If a provider fails, fall through to the next one instead of killing the turn.
   const cascade = [];
-  if (hasClaude) cascade.push({ name: "Claude", fn: runClaudeLoop });
-  if (hasOpenAI) cascade.push({ name: "OpenAI", fn: runOpenAILoop });
-  if (hasGemini) cascade.push({ name: "Gemini", fn: runGeminiLoop });
+  if (hasClaude()) cascade.push({ name: "Claude", fn: runClaudeLoop });
+  if (hasOpenAI()) cascade.push({ name: "OpenAI", fn: runOpenAILoop });
+  if (hasGemini()) cascade.push({ name: "Gemini", fn: runGeminiLoop });
+
+  if (cascade.length === 0) {
+    emitError("Nenhum provedor de LLM disponível. Conecte Claude, OpenAI ou Gemini no painel de configurações.");
+    return;
+  }
 
   let result;
   let lastErr;

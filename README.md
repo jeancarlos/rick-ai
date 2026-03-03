@@ -118,7 +118,7 @@ Tables are automatically pruned to prevent unbounded growth:
 
 All delegated tasks (coding, research, browser automation) are handled by a **single unified sub-agent** container with:
 
-- **LLM cascade**: Claude Opus 4.6 → GPT-5.3 Codex → Gemini 3.1 Pro (automatic failover on rate limits or errors)
+- **LLM cascade**: Claude Opus 4.6 → GPT-5.3 Codex → Gemini 3.1 Pro (automatic failover on rate limits or errors). Providers are re-evaluated per turn, so a session started with only Gemini will automatically gain Claude/GPT access when they are connected later via OAuth.
 - **Tools**: Browser (Playwright + headless Chromium), shell commands, file I/O, HTTP fetch, read-only PostgreSQL access
 - **NDJSON protocol**: stdin/stdout communication with the main Rick process for real-time streaming
 - **Context rotation**: Automatic summarization when context window fills up
