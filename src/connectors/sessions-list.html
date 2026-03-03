@@ -408,15 +408,17 @@ function renderSessions(agentName, agentLogo, mainSessionName, sessions) {
 
     // Add kill button for active sessions (after appending to DOM)
     if (canKill) {
-      var killBtn = document.createElement('button');
-      killBtn.className = 'card-kill';
-      killBtn.textContent = 'Encerrar';
-      killBtn.onclick = function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        killSession(s.id, this);
-      };
-      card.querySelector('.card-meta').appendChild(killBtn);
+      (function(sid) {
+        var killBtn = document.createElement('button');
+        killBtn.className = 'card-kill';
+        killBtn.textContent = 'Encerrar';
+        killBtn.onclick = function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          killSession(sid, this);
+        };
+        card.querySelector('.card-meta').appendChild(killBtn);
+      })(s.id);
     }
 
     if (isHighlighted) highlightEl = card;
