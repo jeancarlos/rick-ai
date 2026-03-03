@@ -123,10 +123,10 @@ function getRickSessionToken() {
   return process.env.RICK_SESSION_TOKEN || "";
 }
 
-async function rickApiGet(path) {
+async function rickApiGet(path, { silent = false } = {}) {
   const token = getRickSessionToken();
   if (!RICK_API_URL || !token) {
-    emitStatus("rick_memory/rick_search indisponível: RICK_API_URL ou RICK_SESSION_TOKEN não configurado");
+    if (!silent) emitStatus("rick_memory/rick_search indisponível: RICK_API_URL ou RICK_SESSION_TOKEN não configurado");
     return null;
   }
   try {
@@ -135,12 +135,12 @@ async function rickApiGet(path) {
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) {
-      emitStatus(`rick API erro: ${res.status} ${res.statusText}`);
+      if (!silent) emitStatus(`rick API erro: ${res.status} ${res.statusText}`);
       return null;
     }
     return await res.json();
   } catch (err) {
-    emitStatus(`rick API falhou: ${err.message || "timeout/rede"}`);
+    if (!silent) emitStatus(`rick API falhou: ${err.message || "timeout/rede"}`);
     return null;
   }
 }
@@ -183,8 +183,9 @@ async function refreshLLMTokens() {
   const needOpenAI = !process.env.OPENAI_API_KEY && !process.env.OPENAI_ACCESS_TOKEN;
 
   const fetches = [];
-  if (needClaude) fetches.push(rickApiGet("/api/agent/llm-token?provider=claude").then(d => ({ provider: "claude", data: d })));
-  if (needOpenAI) fetches.push(rickApiGet("/api/agent/llm-token?provider=openai").then(d => ({ provider: "openai", data: d })));
+  // Use silent: true to avoid showing 404 errors when OAuth is not configured
+  if (needClaude) fetches.push(rickApiGet("/api/agent/llm-token?provider=claude", { silent: true }).then(d => ({ provider: "claude", data: d })));
+  if (needOpenAI) fetches.push(rickApiGet("/api/agent/llm-token?provider=openai", { silent: true }).then(d => ({ provider: "openai", data: d })));
 
   const results = await Promise.allSettled(fetches);
   for (const r of results) {
