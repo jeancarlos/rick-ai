@@ -118,6 +118,7 @@ export let httpServer: Server | null = null;
 // Services are registered after init (startHealthServer runs before services are created).
 let registeredMemoryService: MemoryService | null = null;
 let registeredVectorMemory: VectorMemoryService | null = null;
+let registeredKillSession: ((sessionId: string) => Promise<void>) | null = null;
 
 /**
  * Register services for the sub-agent Agent API (read + write).
@@ -133,6 +134,14 @@ export function registerAgentApiServices(
     { hasVectorMemory: !!vectorMemory },
     "Agent API services registered",
   );
+}
+
+/**
+ * Register the session kill function so public API can kill sessions.
+ * Called from index.ts after SessionManager is initialized.
+ */
+export function registerSessionKiller(killFn: (sessionId: string) => Promise<void>): void {
+  registeredKillSession = killFn;
 }
 
 export function startHealthServer(port: number): void {
@@ -191,6 +200,13 @@ export function startHealthServer(port: number): void {
     const sessionsApiMatch = req.url?.match(/^\/api\/sessions\/([a-f0-9]{16})$/);
     if (sessionsApiMatch && req.method === "GET") {
       await handlePublicSessionsApi(sessionsApiMatch[1], res);
+      return;
+    }
+
+    // Public session kill API: POST /api/sessions/:token/kill/:sessionId
+    const killApiMatch = req.url?.match(/^\/api\/sessions\/([a-f0-9]{16})\/kill\/([a-f0-9]+)$/);
+    if (killApiMatch && req.method === "POST") {
+      await handlePublicKillSession(killApiMatch[1], killApiMatch[2], res);
       return;
     }
 
@@ -683,14 +699,62 @@ async function handlePublicSessionsApi(token: string, res: ServerResponse): Prom
       lastMessageAt: r.last_message_at,
     }));
 
+    const agentLogo = await configGet("AGENT_LOGO") || "";
+
     res.writeHead(200, {
       "Content-Type": "application/json",
       "Cache-Control": "no-cache",
     });
-    res.end(JSON.stringify({ agentName: config.agentName, sessions }));
+    res.end(JSON.stringify({ agentName: config.agentName, agentLogo, sessions }));
   } catch (err) {
     logger.error({ err, token }, "Failed to serve public sessions API");
     jsonResponse(res, 500, { error: "Erro interno" });
+  }
+}
+
+/**
+ * POST /api/sessions/:token/kill/:sessionId — Kill an active session.
+ * Validates that the token resolves to the session's owner before killing.
+ */
+async function handlePublicKillSession(token: string, sessionId: string, res: ServerResponse): Promise<void> {
+  try {
+    if (!registeredKillSession) {
+      jsonResponse(res, 503, { error: "Servico indisponivel" });
+      return;
+    }
+
+    const userId = await resolveSessionsToken(token);
+    if (!userId) {
+      jsonResponse(res, 404, { error: "Token invalido" });
+      return;
+    }
+
+    // Verify the session belongs to this user
+    const result = await query(
+      `SELECT user_id, status FROM sub_agent_sessions WHERE id = $1`,
+      [sessionId],
+    );
+    if (result.rows.length === 0) {
+      jsonResponse(res, 404, { error: "Sessao nao encontrada" });
+      return;
+    }
+    if (result.rows[0].user_id !== userId) {
+      jsonResponse(res, 403, { error: "Acesso negado" });
+      return;
+    }
+
+    const status = result.rows[0].status;
+    if (status === "killed" || status === "done") {
+      jsonResponse(res, 200, { ok: true, already: true });
+      return;
+    }
+
+    await registeredKillSession(sessionId);
+    logger.info({ sessionId, userId, token }, "Session killed via public API");
+    jsonResponse(res, 200, { ok: true });
+  } catch (err) {
+    logger.error({ err, token, sessionId }, "Failed to kill session via public API");
+    jsonResponse(res, 500, { error: "Erro ao encerrar sessao" });
   }
 }
 

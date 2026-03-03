@@ -86,6 +86,10 @@ export class Agent {
     return this.sessionManager.expireStaleDoneSessions();
   }
 
+  async killSession(sessionId: string): Promise<void> {
+    return this.sessionManager.killSession(sessionId);
+  }
+
   /**
    * Public entry point — serializes per user to prevent race conditions.
    * Two messages from the same user are processed sequentially, never concurrently.

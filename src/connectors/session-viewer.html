@@ -73,6 +73,25 @@ body {
 .status-dot.done { background: #f59e0b; }
 .status-dot.offline { background: #6b7280; }
 
+.header-kill {
+  background: none;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #ef4444;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.2s, border-color 0.2s;
+  display: none;
+}
+.header-kill:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: #ef4444;
+}
+.header-kill:disabled { opacity: 0.5; cursor: not-allowed; }
+.header-kill.visible { display: block; }
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
@@ -404,6 +423,7 @@ body {
       <span id="status-text">Conectando...</span>
     </div>
   </div>
+  <button class="header-kill" id="kill-btn" onclick="killCurrentSession()">Encerrar</button>
 </div>
 
 <div class="connection-bar" id="connection-bar">Reconectando...</div>
@@ -483,6 +503,7 @@ function sessionVariantName(sessionId, agentName) {
 
 // ==================== STATE ====================
 var sessionId = location.pathname.replace(/^\/s\//, '');
+var userToken = new URLSearchParams(location.search).get('t') || '';
 var ws = null;
 var reconnectAttempts = 0;
 var reconnectTimer = null;
@@ -656,6 +677,35 @@ function updateSessionState(state) {
     text.textContent = 'Conectando...';
     typing.classList.remove('visible');
   }
+
+  // Show/hide kill button: only if user has a token and session is active
+  var killBtn = document.getElementById('kill-btn');
+  if (userToken && (state === 'running' || state === 'starting' || state === 'waiting_user')) {
+    killBtn.classList.add('visible');
+  } else {
+    killBtn.classList.remove('visible');
+  }
+}
+
+// ==================== KILL SESSION ====================
+function killCurrentSession() {
+  if (!userToken) return;
+  if (!confirm('Encerrar esta sessao?')) return;
+  var btn = document.getElementById('kill-btn');
+  btn.disabled = true;
+  btn.textContent = '...';
+
+  fetch('/api/sessions/' + userToken + '/kill/' + sessionId, { method: 'POST' })
+    .then(function(resp) {
+      if (!resp.ok) throw new Error('Erro ' + resp.status);
+      // State will update via WebSocket, but force it in case WS is slow
+      updateSessionState('killed');
+    })
+    .catch(function(err) {
+      alert('Erro ao encerrar: ' + err.message);
+      btn.disabled = false;
+      btn.textContent = 'Encerrar';
+    });
 }
 
 function updateHeaderIcon() {

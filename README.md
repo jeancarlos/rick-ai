@@ -204,6 +204,7 @@ Sub-agent sessions have a lifecycle: `starting` → `running` → `waiting_user`
 | `/s/:sessionId` | GET | None | Public sub-agent session viewer |
 | `/u/:token` | GET | None | Public sessions dashboard (per-user, deterministic token) |
 | `/api/sessions/:token` | GET | None | Sessions list API (returns JSON with user's sessions) |
+| `/api/sessions/:token/kill/:sessionId` | POST | None | Kill an active session (validates token ownership) |
 | `/audio/:id` | GET | None | Serve stored audio blob |
 | `/img/:id` | GET | None | Serve stored image blob |
 | `/api/version` | GET | Token | Current version vs GitHub latest |

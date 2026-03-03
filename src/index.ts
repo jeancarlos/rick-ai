@@ -15,7 +15,7 @@ import { WebConnector } from "./connectors/web.js";
 import { UserService } from "./auth/user-service.js";
 import { closeVectorPool } from "./memory/vector-db.js";
 import { EditSession } from "./subagent/edit-session.js";
-import { startHealthServer, setHealthy, registerAgentApiServices } from "./health.js";
+import { startHealthServer, setHealthy, registerAgentApiServices, registerSessionKiller } from "./health.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -116,6 +116,9 @@ async function main() {
 
   // Register services for the sub-agent read-only API (/api/agent/*)
   registerAgentApiServices(memory, vectorMemory);
+
+  // Register session killer for the public sessions API
+  registerSessionKiller((sessionId) => agent.killSession(sessionId));
 
   // Wire welcome message sender: UserService → ConnectorManager
   userService.setWelcomeSender(async (connector, externalId, text) => {

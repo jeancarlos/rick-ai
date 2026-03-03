@@ -48,6 +48,13 @@ body {
   justify-content: center;
   flex-shrink: 0;
   color: var(--text2);
+  overflow: hidden;
+}
+
+.header-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .header-info { flex: 1; min-width: 0; }
@@ -192,6 +199,29 @@ body {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Kill button */
+.card-kill {
+  background: none;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #ef4444;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.card-kill:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: #ef4444;
+}
+
+.card-kill:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Responsive */
 @media (max-width: 480px) {
   .container { padding: 10px; }
@@ -202,7 +232,7 @@ body {
 <body>
 
 <div class="header">
-  <div class="header-icon">
+  <div class="header-icon" id="header-icon">
     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zM7.5 11.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5S9.83 13 9 13s-1.5-.67-1.5-1.5zM16 17H8v-2h8v2zm-1-4c-.83 0-1.5-.67-1.5-1.5S14.17 10 15 10s1.5.67 1.5 1.5S15.83 13 15 13z"/></svg>
   </div>
   <div class="header-info">
@@ -275,14 +305,54 @@ function statusClass(status) {
   return status;
 }
 
+function isActive(status) {
+  return status === 'active' || status === 'running' || status === 'starting' || status === 'waiting_user';
+}
+
+// ==================== KILL SESSION ====================
+function killSession(sessionId, btn) {
+  if (!confirm('Encerrar esta sessao?')) return;
+  btn.disabled = true;
+  btn.textContent = '...';
+
+  fetch('/api/sessions/' + token + '/kill/' + sessionId, { method: 'POST' })
+    .then(function(resp) {
+      if (!resp.ok) throw new Error('Erro ' + resp.status);
+      return resp.json();
+    })
+    .then(function() {
+      // Update the card UI immediately
+      var card = document.getElementById('session-' + sessionId);
+      if (card) {
+        var statusEl = card.querySelector('.card-status');
+        if (statusEl) {
+          statusEl.className = 'card-status killed';
+          statusEl.textContent = 'Encerrado';
+        }
+        btn.remove();
+      }
+    })
+    .catch(function(err) {
+      alert('Erro ao encerrar: ' + err.message);
+      btn.disabled = false;
+      btn.textContent = 'Encerrar';
+    });
+}
+
 // ==================== RENDERING ====================
 var token = location.pathname.replace(/^\/u\//, '');
 var highlightId = location.hash ? location.hash.substring(1) : null;
 
-function renderSessions(agentName, sessions) {
+function renderSessions(agentName, agentLogo, sessions) {
   document.title = agentName + ' - Sessoes';
   document.getElementById('header-name').textContent = agentName;
   document.getElementById('header-subtitle').textContent = sessions.length + ' sessao' + (sessions.length !== 1 ? 'es' : '');
+
+  // Set logo if available
+  if (agentLogo && agentLogo.length > 10) {
+    var iconEl = document.getElementById('header-icon');
+    iconEl.innerHTML = '<img src="' + agentLogo + '" alt="' + escapeHtml(agentName) + '">';
+  }
 
   var container = document.getElementById('container');
   container.innerHTML = '';
@@ -298,9 +368,10 @@ function renderSessions(agentName, sessions) {
     var s = sessions[i];
     var variantName = sessionVariantName(s.id, agentName);
     var isHighlighted = highlightId && s.id === highlightId;
+    var canKill = isActive(s.status);
 
     var card = document.createElement('a');
-    card.href = '/s/' + s.id;
+    card.href = '/s/' + s.id + '?t=' + token;
     card.className = 'session-card' + (isHighlighted ? ' highlighted' : '');
     card.id = 'session-' + s.id;
 
@@ -322,6 +393,19 @@ function renderSessions(agentName, sessions) {
       '</div>';
 
     container.appendChild(card);
+
+    // Add kill button for active sessions (after appending to DOM)
+    if (canKill) {
+      var killBtn = document.createElement('button');
+      killBtn.className = 'card-kill';
+      killBtn.textContent = 'Encerrar';
+      killBtn.onclick = function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        killSession(s.id, this);
+      };
+      card.querySelector('.card-meta').appendChild(killBtn);
+    }
 
     if (isHighlighted) highlightEl = card;
   }
@@ -349,7 +433,7 @@ fetch('/api/sessions/' + token)
     return resp.json();
   })
   .then(function(data) {
-    renderSessions(data.agentName || 'Sub-agente', data.sessions || []);
+    renderSessions(data.agentName || 'Sub-agente', data.agentLogo || '', data.sessions || []);
   })
   .catch(function(err) {
     showError(err.message || 'Erro desconhecido');
