@@ -422,10 +422,11 @@ function renderSessions(agentName, agentLogo, mainSessionName, sessions) {
     if (isHighlighted) highlightEl = card;
   }
 
-  // Scroll to highlighted session
+  // Scroll to highlighted session, then clean the hash from the URL
   if (highlightEl) {
     setTimeout(function() {
       highlightEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      history.replaceState(null, '', location.pathname + location.search);
     }, 100);
   }
 }
