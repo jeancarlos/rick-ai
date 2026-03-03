@@ -172,13 +172,18 @@ fi
 
 step "4/5 — Start"
 
-read -rp "  Install as systemd service (auto-start on boot)? [Y/n]: " INSTALL_SERVICE
-INSTALL_SERVICE="${INSTALL_SERVICE:-Y}"
+if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl >/dev/null 2>&1; then
+  read -rp "  Install as systemd service (auto-start on boot)? [Y/n]: " INSTALL_SERVICE
+  INSTALL_SERVICE="${INSTALL_SERVICE:-Y}"
 
-if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
-  bash "${SCRIPT_DIR}/setup-service.sh"
+  if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
+    bash "${SCRIPT_DIR}/setup-service.sh"
+  else
+    info "Starting with docker compose..."
+    docker compose up -d
+  fi
 else
-  info "Starting with docker compose..."
+  info "Systemd not available ($(uname -s)) — starting with docker compose..."
   docker compose up -d
 fi
 
