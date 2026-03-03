@@ -586,11 +586,24 @@ export class Agent {
   private async buildSubAgentEnv(userId: number): Promise<Record<string, string>> {
     const env: Record<string, string> = {};
 
-    // Fetch Claude and OpenAI tokens in parallel — both are independent I/O operations
-    const [claudeToken, openaiToken] = await Promise.all([
-      this.claudeOAuth.getValidToken(userId),
-      this.openaiOAuth.getValidToken(userId),
-    ]);
+    // OAuth tokens are global (shared across all users), stored under admin user (id=1).
+    // Try the requesting user first, then fall back to admin.
+    const adminUserId = 1;
+    const userIdsToTry = userId === adminUserId ? [adminUserId] : [userId, adminUserId];
+
+    // Fetch Claude and OpenAI tokens — try user first, then admin
+    let claudeToken: string | null = null;
+    let openaiToken: { accessToken: string; accountId: string | null } | null = null;
+
+    for (const uid of userIdsToTry) {
+      if (!claudeToken) {
+        claudeToken = await this.claudeOAuth.getValidToken(uid);
+      }
+      if (!openaiToken) {
+        openaiToken = await this.openaiOAuth.getValidToken(uid);
+      }
+      if (claudeToken && openaiToken) break;
+    }
 
     // Anthropic (Claude) — OAuth token first, then API key fallback
     if (claudeToken) {

@@ -599,12 +599,19 @@ async function handleAgentApiGet(
         return;
       }
 
+      // OAuth tokens are global — try user first, then fall back to admin (id=1)
+      const adminUserId = 1;
+      const userIdsToTry = userId === adminUserId ? [adminUserId] : [userId, adminUserId];
+
       let accessToken: string | null = null;
-      if (provider === "claude") {
-        accessToken = await claudeOAuthService.getValidToken(userId);
-      } else {
-        const oauthToken = await openaiOAuthService.getValidToken(userId);
-        accessToken = oauthToken?.accessToken ?? null;
+      for (const uid of userIdsToTry) {
+        if (accessToken) break;
+        if (provider === "claude") {
+          accessToken = await claudeOAuthService.getValidToken(uid);
+        } else {
+          const oauthToken = await openaiOAuthService.getValidToken(uid);
+          accessToken = oauthToken?.accessToken ?? null;
+        }
       }
 
       if (!accessToken) {
