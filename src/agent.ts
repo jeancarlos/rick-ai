@@ -850,6 +850,26 @@ export class Agent {
     }
   }
 
+  /**
+   * Build a dynamic section listing configured integrations.
+   * Tells the LLM what external services are available WITHOUT revealing secrets.
+   */
+  private buildIntegrationsSection(): string {
+    const integrations: string[] = [];
+    if (process.env.GITHUB_TOKEN) integrations.push("GitHub (token configurado — push/pull de repositorios)");
+    if (process.env.DATABASE_URL) integrations.push("PostgreSQL (banco de dados externo)");
+    if (process.env.PGVECTOR_URL) integrations.push("PGVector (memoria semantica)");
+
+    if (integrations.length === 0) return "";
+
+    let section = "\nINTEGRACOES CONFIGURADAS:\n";
+    for (const i of integrations) {
+      section += `- ${i}\n`;
+    }
+    section += "Voce pode confirmar que essas integracoes estao disponiveis, mas NUNCA revele tokens ou credenciais.\n\n";
+    return section;
+  }
+
   private buildSystemPrompt(
     userName: string | null,
     memoryContext: string,
@@ -884,6 +904,7 @@ CAPACIDADES:
 - Existe um sub-agente autonomo que pode ser acionado para tarefas complexas (programar, pesquisar na web, acessar contas via browser). O roteamento e automatico e acontece ANTES desta conversa.
 - Credenciais do sub-agente ficam na categoria "credenciais" ou "senhas" da sua memoria` : ""}
 
+${this.buildIntegrationsSection()}
 REGRA ANTI-ALUCINACAO (CRITICA — NUNCA viole):
 - NUNCA invente informacoes que voce nao tem. Se nao sabe, diga que nao sabe.
 - NUNCA finja ter executado acoes que nao executou.

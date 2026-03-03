@@ -225,20 +225,35 @@ export class MemoryService {
     if (memories.length === 0) return "";
 
     const grouped: Record<string, Memory[]> = {};
+    const sensitiveKeys: Record<string, string[]> = {};
     for (const mem of memories) {
-      // Filter out sensitive categories for non-admin users
-      if (role !== "admin" && isSensitiveCategory(mem.category)) continue;
+      if (role !== "admin" && isSensitiveCategory(mem.category)) {
+        // For non-admin: remember the key exists but don't include the value
+        if (!sensitiveKeys[mem.category]) sensitiveKeys[mem.category] = [];
+        sensitiveKeys[mem.category].push(mem.key);
+        continue;
+      }
       if (!grouped[mem.category]) grouped[mem.category] = [];
       grouped[mem.category].push(mem);
     }
 
-    if (Object.keys(grouped).length === 0) return "";
+    const hasSensitive = Object.keys(sensitiveKeys).length > 0;
+    if (Object.keys(grouped).length === 0 && !hasSensitive) return "";
 
     let context = `\n--- MEMORIAS DO ${config.agentName.toUpperCase()} ---\n`;
     for (const [category, mems] of Object.entries(grouped)) {
       context += `\n[${category.toUpperCase()}]\n`;
       for (const mem of mems) {
         context += `- ${mem.key}: ${mem.value}\n`;
+      }
+    }
+    // For non-admin users: show that sensitive keys exist without revealing values
+    if (hasSensitive) {
+      for (const [category, keys] of Object.entries(sensitiveKeys)) {
+        context += `\n[${category.toUpperCase()}]\n`;
+        for (const key of keys) {
+          context += `- ${key}: [configurado]\n`;
+        }
       }
     }
     context += "--- FIM DAS MEMORIAS ---\n";
