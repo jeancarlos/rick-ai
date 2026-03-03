@@ -10,12 +10,15 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'
 
 info()  { echo -e "${CYAN}[setup]${NC} $*"; }
 ok()    { echo -e "${GREEN}[  ok ]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[warn]${NC} $*"; }
 fail()  { echo -e "${RED}[fail]${NC} $*"; exit 1; }
+step()  { echo -e "\n${BOLD}── Step $1 ──${NC}\n"; }
 
 echo ""
 echo "  ╔══════════════════════════════════╗"
@@ -23,9 +26,11 @@ echo "  ║       Rick AI — Setup           ║"
 echo "  ╚══════════════════════════════════╝"
 echo ""
 
-# ==================== PHASE 1: DEPENDENCY CHECK ====================
+# ─────────────────────────────────────────────────────────────────────
+# Step 1: Dependencies
+# ─────────────────────────────────────────────────────────────────────
 
-info "Checking dependencies..."
+step "1/5 — Dependencies"
 
 command -v docker >/dev/null 2>&1 || fail "Docker not found. Install: https://docs.docker.com/engine/install/"
 docker info >/dev/null 2>&1 || fail "Docker daemon not running. Start it: sudo systemctl start docker"
@@ -33,119 +38,93 @@ docker compose version >/dev/null 2>&1 || fail "Docker Compose plugin not found.
 
 ok "Docker $(docker --version | grep -oP '\d+\.\d+\.\d+') + Compose $(docker compose version --short)"
 
-# Check if port 80 is available (skip if Rick is already running)
-WEB_PORT="${WEB_PORT:-80}"
-if ss -tlnp 2>/dev/null | grep -q ":${WEB_PORT} " && ! docker compose -f "${PROJECT_DIR}/docker-compose.yml" ps -q 2>/dev/null | grep -q .; then
-  warn "Port ${WEB_PORT} is in use. Set WEB_PORT in .env to use a different port."
-fi
+# ─────────────────────────────────────────────────────────────────────
+# Step 2: Configuration
+# ─────────────────────────────────────────────────────────────────────
 
-# ==================== PHASE 2: .ENV GENERATION ====================
+step "2/5 — Configuration"
 
 if [[ -f "$ENV_FILE" ]]; then
-  info ".env already exists — skipping generation"
-  info "Edit ${ENV_FILE} to change settings"
-  # Load existing values for the summary at the end
+  info ".env already exists — skipping"
+  echo -e "  ${DIM}Edit ${ENV_FILE} to change settings${NC}"
+
+  # Load existing values for summary
   WEB_PASSWORD=$(grep -oP '^WEB_AUTH_PASSWORD=\K.+' "$ENV_FILE" 2>/dev/null || echo "")
   WEB_PORT=$(grep -oP '^WEB_PORT=\K.+' "$ENV_FILE" 2>/dev/null || echo "80")
 else
-  info "Generating .env configuration..."
-  echo ""
+  WEB_PORT="80"
 
-  # Gemini API key (required)
-  echo -e "  ${CYAN}Gemini API Key${NC} (required)"
-  echo ""
-  echo "  Rick uses Google Gemini as its main LLM. You need a free API key."
+  # ── Gemini API Key (required) ──
+
+  echo -e "  ${BOLD}Gemini API Key${NC} ${RED}required${NC}"
+  echo -e "  ${DIM}Rick's main LLM. Free at https://aistudio.google.com/apikey${NC}"
   echo ""
   echo "  How to get one:"
-  echo "    1. Go to https://aistudio.google.com/apikey"
-  echo "    2. Sign in with your Google account"
-  echo "    3. Click \"Create API key\""
-  echo "    4. Copy the key and paste it below"
+  echo "    1. Open https://aistudio.google.com/apikey"
+  echo "    2. Sign in with Google"
+  echo "    3. Click \"Create API key\" → copy it"
   echo ""
+
   GEMINI_KEY=""
   while [[ -z "$GEMINI_KEY" ]]; do
-    read -rp "  Gemini API key: " GEMINI_KEY
-    [[ -z "$GEMINI_KEY" ]] && warn "Gemini API key is required to run Rick."
+    read -rp "  > API key: " GEMINI_KEY
+    [[ -z "$GEMINI_KEY" ]] && warn "Required. Rick won't start without it."
   done
-  ok "Gemini API key set"
+  ok "Gemini key set"
 
-  # Web UI password (optional but recommended)
-  echo ""
-  echo -e "  ${CYAN}Web UI Password${NC} (recommended)"
-  echo ""
-  echo "  The Web UI gives you a browser-based admin panel with:"
-  echo "    - Chat interface with audio and image support"
-  echo "    - User management (approve/block users)"
-  echo "    - Sub-agent session viewer"
-  echo "    - Settings, OAuth, and WhatsApp management"
-  echo ""
-  echo "  Pick any password you want. Leave empty to disable the Web UI."
-  echo ""
-  read -rp "  Web UI password: " WEB_PASSWORD
-  if [[ -n "$WEB_PASSWORD" ]]; then
-    ok "Web UI enabled"
-  else
-    warn "Web UI disabled (no password set)"
-  fi
+  # ── Web UI Password (recommended) ──
 
-  # Database (optional)
   echo ""
-  echo -e "  ${CYAN}PostgreSQL Database${NC} (optional)"
+  echo -e "  ${BOLD}Web UI Password${NC} ${YELLOW}recommended${NC}"
+  echo -e "  ${DIM}Enables the admin panel: chat, user management, settings, sessions${NC}"
   echo ""
-  echo "  Rick can use PostgreSQL or SQLite for storing memories and conversations."
-  echo "  SQLite works out of the box (zero setup, stored at ./data/rick.db)."
-  echo "  PostgreSQL is recommended for production (multi-user, better search)."
+
+  read -rp "  > Password (empty = no Web UI): " WEB_PASSWORD
+  [[ -n "$WEB_PASSWORD" ]] && ok "Web UI enabled" || warn "Web UI disabled"
+
+  # ── Database (optional) ──
+
   echo ""
-  echo "  Format: postgresql://user:password@host:5432/dbname"
+  echo -e "  ${BOLD}Database${NC} ${DIM}optional${NC}"
+  echo -e "  ${DIM}PostgreSQL for production, SQLite for dev/testing (zero setup)${NC}"
+  echo -e "  ${DIM}Format: postgresql://user:pass@host:5432/dbname${NC}"
   echo ""
-  read -rp "  PostgreSQL URL (leave empty for SQLite): " DB_URL
+
+  read -rp "  > PostgreSQL URL (empty = SQLite): " DB_URL
+  VECTOR_DB_URL=""
   if [[ -n "$DB_URL" ]]; then
-    ok "PostgreSQL configured"
-
+    ok "PostgreSQL"
     echo ""
-    echo -e "  ${CYAN}pgvector Database${NC} (optional)"
+    echo -e "  ${BOLD}pgvector${NC} ${DIM}optional — semantic search over past conversations${NC}"
+    echo -e "  ${DIM}Needs pgvector extension. Can be same or separate DB${NC}"
     echo ""
-    echo "  Semantic memory uses pgvector to search past conversations by meaning."
-    echo "  Requires a PostgreSQL instance with the pgvector extension installed."
-    echo "  Can be the same or a different database from the main one."
-    echo ""
-    read -rp "  pgvector URL (leave empty to skip): " VECTOR_DB_URL
-    if [[ -n "$VECTOR_DB_URL" ]]; then
-      ok "pgvector configured"
-    fi
+    read -rp "  > pgvector URL (empty = skip): " VECTOR_DB_URL
+    [[ -n "$VECTOR_DB_URL" ]] && ok "pgvector enabled"
   else
-    ok "Using SQLite (zero setup)"
-    VECTOR_DB_URL=""
+    ok "SQLite (./data/rick.db)"
   fi
 
-  # Encryption key (optional)
-  echo ""
-  echo -e "  ${CYAN}Memory Encryption Key${NC} (optional)"
-  echo ""
-  echo "  Rick can encrypt sensitive memories (passwords, tokens, credentials)"
-  echo "  at rest using AES-256-GCM. Without this, they're stored as plaintext."
-  echo ""
-  echo "  Use any passphrase you want, or generate one:"
-  echo "    openssl rand -base64 32"
-  echo ""
-  read -rp "  Encryption key (leave empty for plaintext): " ENCRYPTION_KEY
-  if [[ -n "$ENCRYPTION_KEY" ]]; then
-    ok "Memory encryption enabled"
-  else
-    warn "Credentials will be stored as plaintext"
-  fi
+  # ── Encryption (optional) ──
 
-  # Generate .env
+  echo ""
+  echo -e "  ${BOLD}Memory Encryption${NC} ${DIM}optional${NC}"
+  echo -e "  ${DIM}AES-256-GCM for passwords/tokens stored in memory${NC}"
+  echo -e "  ${DIM}Generate a key: openssl rand -base64 32${NC}"
+  echo ""
+
+  read -rp "  > Encryption key (empty = plaintext): " ENCRYPTION_KEY
+  [[ -n "$ENCRYPTION_KEY" ]] && ok "Encryption enabled" || warn "Plaintext storage"
+
+  # ── Write .env ──
+
   cat > "$ENV_FILE" <<ENVEOF
 # Generated by setup.sh on $(date '+%Y-%m-%d %H:%M')
 
 # === LLM Providers ===
 GEMINI_API_KEY=${GEMINI_KEY}
 GEMINI_MODEL=gemini-3-flash-preview
-
 ANTHROPIC_API_KEY=
 ANTHROPIC_MODEL=claude-opus-4-6
-
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.3-codex
 
@@ -155,7 +134,7 @@ $(if [[ -n "$VECTOR_DB_URL" ]]; then echo "VECTOR_DATABASE_URL=${VECTOR_DB_URL}"
 
 # === Web UI ===
 $(if [[ -n "$WEB_PASSWORD" ]]; then echo "WEB_AUTH_PASSWORD=${WEB_PASSWORD}"; else echo "# WEB_AUTH_PASSWORD="; fi)
-WEB_PORT=80
+WEB_PORT=${WEB_PORT}
 
 # === Agent ===
 AGENT_LANGUAGE=pt-BR
@@ -169,41 +148,50 @@ $(if [[ -n "$ENCRYPTION_KEY" ]]; then echo "MEMORY_ENCRYPTION_KEY=${ENCRYPTION_K
 LOG_LEVEL=info
 ENVEOF
 
-  ok ".env created at ${ENV_FILE}"
+  ok ".env saved"
 fi
 
-# ==================== PHASE 3: BUILD ====================
+# ─────────────────────────────────────────────────────────────────────
+# Step 3: Build
+# ─────────────────────────────────────────────────────────────────────
 
-echo ""
-info "Building Docker image (this may take a few minutes on first run)..."
+step "3/5 — Build"
+
+info "Building Docker image..."
 cd "$PROJECT_DIR"
 
 if docker compose build 2>&1 | tail -1; then
-  ok "Docker image built"
+  ok "Image built"
 else
-  fail "Docker build failed. Check the output above."
+  fail "Build failed. Run 'docker compose build' to see full output."
 fi
 
-# ==================== PHASE 4: SYSTEMD SERVICE ====================
+# ─────────────────────────────────────────────────────────────────────
+# Step 4: Start
+# ─────────────────────────────────────────────────────────────────────
 
-echo ""
-read -rp "  Install as systemd service (starts on boot)? [Y/n]: " INSTALL_SERVICE
+step "4/5 — Start"
+
+read -rp "  Install as systemd service (auto-start on boot)? [Y/n]: " INSTALL_SERVICE
 INSTALL_SERVICE="${INSTALL_SERVICE:-Y}"
 
 if [[ "$INSTALL_SERVICE" =~ ^[Yy]$ ]]; then
   bash "${SCRIPT_DIR}/setup-service.sh"
 else
-  info "Starting with docker compose (no systemd)..."
+  info "Starting with docker compose..."
   docker compose up -d
 fi
 
-# ==================== PHASE 5: HEALTH CHECK ====================
+# ─────────────────────────────────────────────────────────────────────
+# Step 5: Verify
+# ─────────────────────────────────────────────────────────────────────
 
-echo ""
-info "Waiting for Rick to start..."
+step "5/5 — Verify"
+
+info "Waiting for health check..."
 
 HEALTHY=false
-for i in $(seq 1 20); do
+for _ in $(seq 1 20); do
   sleep 2
   RESP=$(curl -sf "http://localhost:${WEB_PORT}/health" 2>/dev/null || echo "")
   if echo "$RESP" | grep -q '"status":"ok"'; then
@@ -213,28 +201,33 @@ for i in $(seq 1 20); do
 done
 
 if [[ "$HEALTHY" == "true" ]]; then
-  ok "Rick is running and healthy!"
+  ok "Rick is healthy!"
 else
-  warn "Rick started but health check didn't pass yet. Check logs:"
-  echo "  docker compose logs -f agent"
+  warn "Health check pending. Check: docker compose logs -f agent"
 fi
 
-# ==================== DONE ====================
+# ─────────────────────────────────────────────────────────────────────
+# Summary
+# ─────────────────────────────────────────────────────────────────────
 
 echo ""
 echo "  ╔══════════════════════════════════╗"
 echo "  ║       Rick AI — Ready!          ║"
 echo "  ╚══════════════════════════════════╝"
 echo ""
-echo "  Next steps:"
-echo "    1. Pair WhatsApp:  docker compose logs -f agent  (scan QR code)"
+
 if [[ -n "${WEB_PASSWORD:-}" ]]; then
-  echo "    2. Open Web UI:     http://localhost:${WEB_PORT}"
-  echo "       Password:        ${WEB_PASSWORD}"
+  echo -e "  ${BOLD}Web UI${NC}"
+  echo "    URL:       http://localhost:${WEB_PORT}"
+  echo "    Password:  ${WEB_PASSWORD}"
+  echo ""
 fi
+
+echo -e "  ${BOLD}WhatsApp${NC}"
+echo "    Pair:  docker compose logs -f agent  (scan QR code)"
 echo ""
-echo "  Useful commands:"
+echo -e "  ${BOLD}Commands${NC}"
 echo "    docker compose logs -f agent     # follow logs"
-echo "    docker compose restart agent     # restart"
+echo "    docker compose up -d             # start (picks up .env changes)"
 echo "    docker compose down              # stop"
 echo ""
