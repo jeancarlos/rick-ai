@@ -1023,10 +1023,11 @@ export class SessionManager {
           logger.debug({ sessionId: session.id, msgType: msg.type }, "Unknown sub-agent message type");
       }
     } catch (err) {
-      // Non-JSON output — treat as plain text
+      // Non-JSON output from the agent process.
+      // This can happen from Docker exec overhead, Node.js warnings, or binary garbage.
+      // Log for debugging but do NOT relay to the user — only NDJSON messages should be visible.
       if (line.trim()) {
-        session.output += line + "\n";
-        this.sendToUser(session, line);
+        logger.debug({ sessionId: session.id, rawLine: line.substring(0, 200) }, "Sub-agent non-JSON stdout (ignored)");
       }
     }
   }

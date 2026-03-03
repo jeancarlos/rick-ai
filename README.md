@@ -118,7 +118,7 @@ Tables are automatically pruned to prevent unbounded growth:
 
 All delegated tasks (coding, research, browser automation) are handled by a **single unified sub-agent** container with:
 
-- **LLM cascade**: Claude Opus 4.6 → GPT-5.3 Codex → Gemini 3.1 Pro (automatic failover on rate limits or errors). Providers are re-evaluated per turn, so a session started with only Gemini will automatically gain Claude/GPT access when they are connected later via OAuth.
+- **LLM cascade**: Claude Opus 4.6 → GPT-5.3 Codex → Gemini 3.1 Pro (automatic failover on rate limits or errors, with automatic retry on timeout before falling through). Providers are re-evaluated per turn, so a session started with only Gemini will automatically gain Claude/GPT access when they are connected later via OAuth. Conversation context is shared across providers via a common transcript, so a cascade switch does not cause amnesia.
 - **Tools**: Browser (Playwright + headless Chromium), shell commands, file I/O, HTTP fetch, read-only PostgreSQL access
 - **NDJSON protocol**: stdin/stdout communication with the main Rick process for real-time streaming
 - **Context rotation**: Automatic summarization when context window fills up
@@ -471,7 +471,7 @@ docker compose logs -f agent
 - **Web UI authentication** — WebSocket connection requires password verification before any data is exchanged. API endpoints require a token parameter. Web UI is admin-only.
 - **Per-user message serialization** — A promise-chain queue prevents race conditions from concurrent messages mutating shared state.
 - **User isolation** — Each user has isolated conversation history. Pending/blocked user messages are saved for admin visibility but never processed by the LLM.
-- **LLM call timeouts** — All LLM providers (Gemini, Anthropic, OpenAI) have 60-second timeouts to prevent indefinite hangs.
+- **LLM call timeouts** — All LLM providers (Gemini, Anthropic, OpenAI) have 5-minute timeouts with automatic retry on timeout before cascading to the next provider.
 - **Automatic table pruning** — Conversation history and message logs are capped to prevent unbounded database growth.
 - **Memory deletion protection** — Memories can only be deleted via the web UI settings panel, never through casual conversation patterns.
 
