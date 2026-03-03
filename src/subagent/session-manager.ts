@@ -750,6 +750,13 @@ export class SessionManager {
           if (msg.message) {
             this.sendToUser(session, `Erro: ${msg.message}`, "error");
           }
+          // After an error, the sub-agent returns to waiting for input —
+          // update state so the UI shows the compose bar instead of "Digitando..."
+          session.state = "waiting_user";
+          session.updatedAt = Date.now();
+          if (this.onSessionMessage) {
+            this.onSessionMessage(session.id, "system", JSON.stringify({ state: "waiting_user" }), "system");
+          }
           break;
 
         case "pong":
