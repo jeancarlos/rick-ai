@@ -103,7 +103,12 @@ export class Agent {
   interruptUser(userId: string): boolean {
     const state = this.userAbortControllers.get(userId);
     if (state) {
-      logger.info({ userId }, "Interrupting user processing");
+      // Increment generation so the in-flight response gets discarded.
+      // This is critical for the Stop button case where no new message is sent.
+      const newGen = (this.userGenerations.get(userId) ?? 0) + 1;
+      this.userGenerations.set(userId, newGen);
+      
+      logger.info({ userId, oldGen: state.generation, newGen }, "Interrupting user processing");
       state.controller.abort();
       this.userAbortControllers.delete(userId);
       return true;
