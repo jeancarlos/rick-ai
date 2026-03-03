@@ -2055,13 +2055,16 @@ Retorne APENAS as linhas de extracao, nada mais.`;
     const bridge: WebAgentBridge = {
       getSessionsForUI: () => {
         const sessions = this.sessionManager.getLiveSessions();
-        return sessions.map((s) => ({
-          id: s.id,
-          state: s.state,
-          taskDescription: s.taskDescription,
-          variantName: s.variantName,
-          createdAt: s.createdAt,
-        }));
+        return sessions
+          .map((s) => ({
+            id: s.id,
+            state: s.state,
+            taskDescription: s.taskDescription,
+            variantName: s.variantName,
+            createdAt: s.createdAt,
+            updatedAt: s.updatedAt,
+          }))
+          .sort((a, b) => b.updatedAt - a.updatedAt);
       },
 
       killSession: async (sessionId: string) => {

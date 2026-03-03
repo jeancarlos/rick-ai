@@ -46,6 +46,7 @@ export interface WebAgentBridge {
     taskDescription: string;
     variantName?: string;
     createdAt: number;
+    updatedAt: number;
   }>;
   /** Kill a sub-agent session */
   killSession(sessionId: string): Promise<void>;
