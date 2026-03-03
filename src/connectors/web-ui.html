@@ -3147,7 +3147,20 @@ function handleServerMessage(msg) {
       break;
 
     case 'settings_saved':
-      if (!msg.success) {
+      if (pendingDbSave) {
+        var saveResultEl = pendingDbSave === 'database'
+          ? document.getElementById('database-test-result')
+          : document.getElementById('vector-test-result');
+        if (saveResultEl) {
+          if (msg.success) {
+            var restartHint = msg.needsRestart ? ' Reinicie para aplicar.' : '';
+            saveResultEl.innerHTML = '<span style="color:var(--success);">Salvo!' + restartHint + '</span>';
+          } else {
+            saveResultEl.innerHTML = '<span style="color:var(--danger);">Erro ao salvar: ' + escapeHtml(msg.error || 'desconhecido') + '</span>';
+          }
+        }
+        pendingDbSave = null;
+      } else if (!msg.success) {
         showToast('Erro ao salvar: ' + (msg.error || 'desconhecido'));
       }
       break;
@@ -5643,6 +5656,9 @@ function saveDatabase() {
     showToast('Insira a connection string do PostgreSQL');
     return;
   }
+  var resultEl = document.getElementById('database-test-result');
+  resultEl.innerHTML = '<span style="color:var(--text-muted);">Salvando...</span>';
+  pendingDbSave = 'database';
   sendSaveSettings({ databaseUrl: url });
 }
 
@@ -5652,8 +5668,13 @@ function saveVectorDatabase() {
     showToast('Insira a connection string do pgvector');
     return;
   }
+  var resultEl = document.getElementById('vector-test-result');
+  resultEl.innerHTML = '<span style="color:var(--text-muted);">Salvando...</span>';
+  pendingDbSave = 'vector';
   sendSaveSettings({ vectorDatabaseUrl: url });
 }
+
+var pendingDbSave = null;
 
 function saveDevRepo() {
   var url = document.getElementById('setting-dev-repo-url').value.trim();
