@@ -24,27 +24,50 @@ import { coreToolDeclarations } from "./tool-declarations.mjs";
 
 // ── NDJSON helpers ──────────────────────────────────────────────────────────
 
+// Generation tracking — ensures only the latest request sends responses.
+// currentGeneration: the highest generation number seen (from host or interrupt).
+// processingGeneration: the generation of the message currently being processed.
+let currentGeneration = 0;
+let processingGeneration = 0;
+
 function emit(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
+/**
+ * Check if the currently processing message has been superseded by a newer one.
+ */
+function isCurrentSuperseded() {
+  return processingGeneration < currentGeneration;
+}
+
 function emitMessage(text) {
+  // Don't emit if this message has been superseded
+  if (isCurrentSuperseded()) return;
   emit({ type: "message", text });
 }
 
 function emitStatus(message) {
+  // Don't emit if this message has been superseded
+  if (isCurrentSuperseded()) return;
   emit({ type: "status", message });
 }
 
 function emitDone(result) {
+  // Don't emit if this message has been superseded
+  if (isCurrentSuperseded()) return;
   emit({ type: "done", result });
 }
 
 function emitWaitingUser(result) {
+  // Don't emit if this message has been superseded
+  if (isCurrentSuperseded()) return;
   emit({ type: "waiting_user", result });
 }
 
 function emitError(message) {
+  // Don't emit if this message has been superseded
+  if (isCurrentSuperseded()) return;
   emit({ type: "error", message });
 }
 
@@ -576,6 +599,10 @@ rl.on("line", async (line) => {
 
   // Handle interrupt message — abort the current LLM request
   if (msg.type === "interrupt") {
+    // Update generation so in-flight responses are discarded
+    if (msg.generation !== undefined) {
+      currentGeneration = msg.generation;
+    }
     if (currentAbortController) {
       interruptRequested = true;
       currentAbortController.abort();
@@ -611,15 +638,29 @@ rl.on("line", async (line) => {
   if (msg.type !== "message" || !msg.text) return;
 
   const userText = msg.text;
+  
+  // Track generation for this message (if provided by host)
+  const messageGeneration = msg.generation ?? (currentGeneration + 1);
+  currentGeneration = messageGeneration;
+  processingGeneration = messageGeneration; // Set for emit functions to check
 
   // Reset interrupt state for new message
   interruptRequested = false;
   currentAbortController = new AbortController();
   const signal = currentAbortController.signal;
 
+  // Helper to check if this message has been superseded
+  const isSuperseded = () => messageGeneration < currentGeneration;
+
   // Refresh LLM tokens from host API — detects providers connected after session start.
   // This is async but runs quickly (parallel fetches with 5s timeout).
   await refreshLLMTokens();
+
+  // Check if superseded after token refresh
+  if (isSuperseded()) {
+    currentAbortController = null;
+    return;
+  }
 
   // Provider cascade: try each currently available provider in priority order.
   // Re-evaluated per turn to detect providers added since session start.
@@ -647,7 +688,10 @@ rl.on("line", async (line) => {
       if (err.message === "Interrupted" || signal.aborted || interruptRequested) {
         // Interrupted by user — emit waiting_user so UI shows compose bar
         currentAbortController = null;
-        emitWaitingUser("(processamento interrompido)");
+        // Only emit if this is still the latest generation
+        if (!isSuperseded()) {
+          emitWaitingUser("(processamento interrompido)");
+        }
         return;
       }
       lastErr = err;
@@ -656,6 +700,11 @@ rl.on("line", async (line) => {
   }
 
   currentAbortController = null;
+
+  // Check if superseded before emitting response
+  if (isSuperseded()) {
+    return;
+  }
 
   if (lastErr) {
     emitError(lastErr.message || "Erro desconhecido no sub-agente.");

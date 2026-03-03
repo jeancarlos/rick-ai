@@ -196,6 +196,12 @@ export class SessionManager {
   /** Active child processes for each session (docker exec) */
   private processes = new Map<string, ChildProcess>();
 
+  /**
+   * Generation counter per session for interrupt handling.
+   * When interrupt is called, generation is incremented so in-flight responses are discarded.
+   */
+  private sessionGenerations = new Map<string, number>();
+
   /** Cached Docker network name for sub-agent containers (null = use default bridge) */
   private resolvedNetwork: string | null = null;
   /** Cached API host for sub-agents to reach the main container */
@@ -547,6 +553,10 @@ export class SessionManager {
       throw new Error(`No session with id ${sessionId}`);
     }
 
+    // Increment generation for this new message
+    const generation = (this.sessionGenerations.get(sessionId) ?? 0) + 1;
+    this.sessionGenerations.set(sessionId, generation);
+
     session.state = "running";
     session.pendingQuestion = null;
     session.updatedAt = Date.now();
@@ -563,8 +573,8 @@ export class SessionManager {
     // Copy images into the container and collect paths
     const imagePaths = await this.injectImages(session, images);
 
-    // Send via stdin NDJSON
-    const payload: any = { type: "message", text: message };
+    // Send via stdin NDJSON with generation number
+    const payload: any = { type: "message", text: message, generation };
     if (imagePaths.length > 0) payload.images = imagePaths;
     this.sendToAgentProcess(sessionId, payload);
   }
@@ -636,10 +646,15 @@ export class SessionManager {
       return false;
     }
 
-    // Send interrupt message to the agent process
-    this.sendToAgentProcess(sessionId, { type: "interrupt" });
+    // Increment generation so in-flight responses are discarded.
+    // This is critical for the Stop button case where no new message is sent.
+    const newGen = (this.sessionGenerations.get(sessionId) ?? 0) + 1;
+    this.sessionGenerations.set(sessionId, newGen);
+
+    // Send interrupt message with the new generation to the agent process
+    this.sendToAgentProcess(sessionId, { type: "interrupt", generation: newGen });
     
-    logger.info({ sessionId }, "Sent interrupt signal to sub-agent");
+    logger.info({ sessionId, generation: newGen }, "Sent interrupt signal to sub-agent");
     return true;
   }
 
