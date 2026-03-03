@@ -33,7 +33,13 @@ export function buildToolUseLine(toolName: string, input?: Record<string, unknow
     out += `\`${short}\`\n`;
   } else {
     const first = firstStringValue(inp);
-    out += first ? `\`${first}\`\n` : "\n";
+    if (first && first.length <= 120) {
+      out += `\`${first}\`\n`;
+    } else if (first) {
+      out += `\`${first.slice(0, 117)}...\`\n`;
+    } else {
+      out += "\n";
+    }
   }
 
   return out;
