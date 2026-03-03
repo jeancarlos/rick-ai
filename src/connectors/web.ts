@@ -75,7 +75,7 @@ export interface WebAgentBridge {
   /** Get conversation history for a user by numeric ID (for main session viewer) */
   getConversationHistoryByUserId(userId: number, limit?: number): Promise<Array<{ role: string; content: string; created_at?: string; audio_url?: string; image_urls?: string[]; file_infos?: Array<{ url: string; name: string; mimeType: string }>; message_type?: string; connector_name?: string }>>;
   /** Handle an incoming message from the main session viewer */
-  handleMainViewerMessage(numericUserId: number, userExternalId: string, text: string): Promise<string>;
+  handleMainViewerMessage(numericUserId: number, userExternalId: string, text: string, userName?: string, userRole?: string): Promise<string>;
   /** Register callback for broadcasting main-session messages to public viewers */
   setMainSessionCallback(cb: (userId: number, role: string, text: string, messageType?: string, connectorName?: string) => void): void;
   /** Register callback for broadcasting typing state to public main-session viewers */
@@ -588,11 +588,13 @@ export class WebConnector implements Connector {
               // The agent's notifyMainViewers callback handles broadcasting
               // both the user echo and agent response to all viewers.
               try {
-                // Get user's external ID for routing
-                const userRow = await query(`SELECT phone FROM users WHERE id = $1`, [userId]);
+                // Get user's external ID, display name, and role for routing
+                const userRow = await query(`SELECT phone, display_name, role FROM users WHERE id = $1`, [userId]);
                 const userExternalId = userRow.rows[0]?.phone || String(userId);
+                const userDisplayName = userRow.rows[0]?.display_name || undefined;
+                const userRole = userRow.rows[0]?.role || "admin";
 
-                const response = await this.agentBridge.handleMainViewerMessage(userId, userExternalId, msg.text);
+                const response = await this.agentBridge.handleMainViewerMessage(userId, userExternalId, msg.text, userDisplayName, userRole);
 
                 // If last user message (before this one) was from WhatsApp,
                 // also relay the agent response to WhatsApp

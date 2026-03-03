@@ -1770,13 +1770,16 @@ Retorne APENAS as linhas de extracao, nada mais.`;
         return this.memory.getConversationHistoryByUserId(userId, limit);
       },
 
-      handleMainViewerMessage: async (numericUserId: number, userExternalId: string, text: string) => {
+      handleMainViewerMessage: async (numericUserId: number, userExternalId: string, text: string, userName?: string, userRole?: string) => {
+        const validRoles = ["admin", "dev", "business"];
+        const resolvedRole = userRole && validRoles.includes(userRole) ? userRole as "admin" | "dev" | "business" : "admin";
         const incoming: IncomingMessage = {
           connectorName: "main-viewer",
           userId: userExternalId,
+          userName: userName || undefined,
           numericUserId,
           text,
-          userRole: "admin",
+          userRole: resolvedRole,
           userStatus: "active",
           skipSubAgentRelay: true,
         };
