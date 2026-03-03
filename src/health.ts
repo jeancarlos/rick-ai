@@ -506,31 +506,53 @@ async function handleAgentApiGet(
       return;
     }
 
-    // GET /api/agent/search?q=texto&limit=5 — Semantic vector search
+    // GET /api/agent/search?q=texto&limit=5 — Semantic vector search (falls back to keyword search)
     if (path === "/api/agent/search") {
-      if (!registeredVectorMemory) {
-        jsonResponse(res, 503, { error: "Busca semantica nao disponivel (pgvector nao configurado)" });
-        return;
-      }
       const q = url.searchParams.get("q") || "";
       if (!q) {
         jsonResponse(res, 400, { error: "Parametro 'q' e obrigatorio" });
         return;
       }
       const limit = Math.min(parseInt(url.searchParams.get("limit") || "5"), 20);
-      const results = await registeredVectorMemory.searchGlobal(q, limit);
-      logger.info(
-        { sessionId: session.sessionId, query: q, limit, count: results.length },
-        "Agent API: semantic search",
-      );
-      jsonResponse(res, 200, {
-        results: results.map((r: any) => ({
-          content: r.content,
-          category: r.category,
-          source: r.source,
-          similarity: r.similarity,
-        })),
-      });
+
+      // Prefer pgvector semantic search when available
+      if (registeredVectorMemory) {
+        const results = await registeredVectorMemory.searchGlobal(q, limit);
+        logger.info(
+          { sessionId: session.sessionId, query: q, limit, count: results.length },
+          "Agent API: semantic search",
+        );
+        jsonResponse(res, 200, {
+          results: results.map((r: any) => ({
+            content: r.content,
+            category: r.category,
+            source: r.source,
+            similarity: r.similarity,
+          })),
+        });
+        return;
+      }
+
+      // Fallback: keyword search via MemoryService (works on SQLite)
+      if (registeredMemoryService) {
+        const memories = await registeredMemoryService.recallGlobal(q);
+        const limited = memories.slice(0, limit);
+        logger.info(
+          { sessionId: session.sessionId, query: q, limit, count: limited.length, fallback: true },
+          "Agent API: keyword search fallback (pgvector not configured)",
+        );
+        jsonResponse(res, 200, {
+          results: limited.map((m: any) => ({
+            content: `${m.key}: ${m.value}`,
+            category: m.category,
+            source: "memory",
+            similarity: null,
+          })),
+        });
+        return;
+      }
+
+      jsonResponse(res, 503, { error: "Busca nao disponivel (nenhum backend de memoria configurado)" });
       return;
     }
 
