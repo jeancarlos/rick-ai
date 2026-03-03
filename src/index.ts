@@ -2,7 +2,7 @@ import { validateConfig, config, reloadConfig } from "./config/env.js";
 import { logger } from "./config/logger.js";
 import { initDatabase, closeDatabase, isPostgres } from "./memory/database.js";
 import { loadConfigFromStore } from "./memory/config-store.js";
-import { runMigrations } from "./memory/migrate.js";
+import { runMigrations, runPostConfigVectorMigrations } from "./memory/migrate.js";
 import { MemoryService } from "./memory/memory-service.js";
 import { EmbeddingService } from "./memory/embedding-service.js";
 import { VectorMemoryService } from "./memory/vector-memory-service.js";
@@ -46,6 +46,9 @@ async function main() {
   await loadConfigFromStore();
   reloadConfig(); // Rebuild the config object with newly injected env vars
   logger.info("Config store loaded");
+
+  // 3b. Run vector DB migrations now that VECTOR_DATABASE_URL may be available from config store
+  await runPostConfigVectorMigrations();
 
   // 4. Validate config (after config store has injected values)
   validateConfig();

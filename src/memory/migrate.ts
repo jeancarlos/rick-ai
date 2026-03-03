@@ -529,8 +529,9 @@ export async function runMigrations(): Promise<void> {
   // Ensure config table exists (idempotent — safe to call always)
   await ensureConfigTable();
 
-  // Run vector DB migrations (separate database — only if vectorDatabaseUrl is set)
-  await runVectorMigrations();
+  // NOTE: Vector migrations are NOT run here — they require VECTOR_DATABASE_URL
+  // which may be loaded from the config store (DB) AFTER this function runs.
+  // Call runPostConfigVectorMigrations() from index.ts after loadConfigFromStore().
 
   // ==================== ADMIN BOOTSTRAP ====================
   // Admin is a unique Web UI-only user with no phone number.
@@ -542,6 +543,15 @@ export async function runMigrations(): Promise<void> {
     );
     logger.info("Bootstrap: created admin user for fresh install");
   }
+}
+
+/**
+ * Run vector DB migrations and backfill.
+ * Must be called AFTER loadConfigFromStore() + reloadConfig() so that
+ * VECTOR_DATABASE_URL (possibly stored in the config DB) is available.
+ */
+export async function runPostConfigVectorMigrations(): Promise<void> {
+  await runVectorMigrations();
 
   // Backfill created_by in vector DB embeddings with the admin user ID.
   // Must run after both main DB migrations (where admin is identified) and vector migrations.

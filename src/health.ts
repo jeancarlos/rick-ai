@@ -517,20 +517,25 @@ async function handleAgentApiGet(
 
       // Prefer pgvector semantic search when available
       if (registeredVectorMemory) {
-        const results = await registeredVectorMemory.searchGlobal(q, limit);
-        logger.info(
-          { sessionId: session.sessionId, query: q, limit, count: results.length },
-          "Agent API: semantic search",
-        );
-        jsonResponse(res, 200, {
-          results: results.map((r: any) => ({
-            content: r.content,
-            category: r.category,
-            source: r.source,
-            similarity: r.similarity,
-          })),
-        });
-        return;
+        try {
+          const results = await registeredVectorMemory.searchGlobal(q, limit);
+          logger.info(
+            { sessionId: session.sessionId, query: q, limit, count: results.length },
+            "Agent API: semantic search",
+          );
+          jsonResponse(res, 200, {
+            results: results.map((r: any) => ({
+              content: r.content,
+              category: r.category,
+              source: r.source,
+              similarity: r.similarity,
+            })),
+          });
+          return;
+        } catch (vecErr) {
+          logger.warn({ err: vecErr, query: q }, "pgvector search failed, falling back to keyword search");
+          // Fall through to keyword search below
+        }
       }
 
       // Fallback: keyword search via MemoryService (works on SQLite)
