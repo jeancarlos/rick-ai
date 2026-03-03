@@ -3152,6 +3152,19 @@ function handleServerMessage(msg) {
       }
       break;
 
+    case 'test_database_result':
+      var testResultEl = msg.which === 'database'
+        ? document.getElementById('database-test-result')
+        : document.getElementById('vector-test-result');
+      if (testResultEl) {
+        if (msg.success) {
+          testResultEl.innerHTML = '<span style="color:var(--success);">' + escapeHtml(msg.message || 'Conectado!') + '</span>';
+        } else {
+          testResultEl.innerHTML = '<span style="color:var(--danger);">' + escapeHtml(msg.error || 'Falha na conexao') + '</span>';
+        }
+      }
+      break;
+
     case 'oauth_start':
       if (msg.authUrl && msg.provider) {
         if (msg.provider === 'openai') {
@@ -6144,24 +6157,11 @@ function testDatabase(which) {
     return;
   }
 
-  resultEl.innerHTML = '<span style="color:var(--text-muted);">Testando...</span>';
+  resultEl.innerHTML = '<span style="color:var(--text-muted);">Testando conexao...</span>';
 
-  // We send a save_settings and let the server respond; for a real test we'd use a different message
-  // For now we just show the test was sent
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      type: 'save_settings',
-      settings: which === 'database' ? { testDatabaseUrl: url } : { testVectorDatabaseUrl: url }
-    }));
+    ws.send(JSON.stringify({ type: 'test_database', which: which, url: url }));
   }
-
-  // The server will respond with settings_saved which we handle in the general handler
-  // Show a pending message
-  setTimeout(function() {
-    if (resultEl.innerHTML.indexOf('Testando') !== -1) {
-      resultEl.innerHTML = '<span style="color:var(--text-muted);">Aguardando resposta do servidor...</span>';
-    }
-  }, 3000);
 }
 
 function sendSaveSettings(settings) {

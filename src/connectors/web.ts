@@ -382,6 +382,9 @@ export class WebConnector implements Connector {
             case "get_user_sessions":
               await this.handleGetUserSessions(ws, msg.userId);
               break;
+            case "test_database":
+              await this.handleTestDatabase(ws, msg.which, msg.url);
+              break;
             default:
               logger.warn({ type: msg.type }, "Unknown WebSocket message type");
           }
@@ -959,6 +962,47 @@ export class WebConnector implements Connector {
     } catch (err) {
       logger.error({ err }, "Failed to save settings");
       this.send(ws, { type: "settings_saved", success: false, error: "Erro ao salvar configuracoes." });
+    }
+  }
+
+  // ==================== Database Connection Test ====================
+
+  /**
+   * Test a PostgreSQL connection string (for DATABASE_URL or VECTOR_DATABASE_URL).
+   */
+  private async handleTestDatabase(ws: WebSocket, which: string, url: string): Promise<void> {
+    if (!url || typeof url !== "string") {
+      this.send(ws, { type: "test_database_result", which, success: false, error: "URL vazia" });
+      return;
+    }
+
+    try {
+      // Dynamic import to avoid bundling pg if not used
+      const { default: pg } = await import("pg");
+      const client = new pg.Client({ connectionString: url, connectionTimeoutMillis: 8000 });
+      await client.connect();
+
+      // For vector DB, also check if pgvector extension is available
+      let vectorOk = false;
+      if (which === "vector") {
+        try {
+          await client.query("CREATE EXTENSION IF NOT EXISTS vector");
+          vectorOk = true;
+        } catch {
+          // Extension not available but connection works
+        }
+      }
+
+      await client.end();
+
+      const msg = which === "vector"
+        ? (vectorOk ? "Conectado! Extensao pgvector disponivel." : "Conectado, mas extensao pgvector NAO encontrada.")
+        : "Conectado com sucesso!";
+      this.send(ws, { type: "test_database_result", which, success: true, message: msg, vectorOk });
+    } catch (err: any) {
+      const errMsg = err.message || "Erro desconhecido";
+      logger.warn({ err: errMsg, which }, "Database connection test failed");
+      this.send(ws, { type: "test_database_result", which, success: false, error: errMsg });
     }
   }
 
