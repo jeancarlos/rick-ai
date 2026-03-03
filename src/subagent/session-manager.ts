@@ -571,7 +571,17 @@ export class SessionManager {
 
   async killSession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
-    if (!session) return;
+
+    if (!session) {
+      // Session not in memory (e.g. already expired or server restarted) —
+      // still update the DB and try to remove the container
+      try {
+        await execFileAsync("docker", ["rm", "-f", `subagent-${sessionId}`]);
+        logger.info({ sessionId }, "Orphan sub-agent container killed");
+      } catch { /* container may not exist */ }
+      await this.updateSessionStatus(sessionId, "killed");
+      return;
+    }
 
     // Kill the agent process
     const proc = this.processes.get(sessionId);
